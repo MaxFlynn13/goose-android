@@ -19,6 +19,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.gooseandroid.brain.*
 import kotlinx.coroutines.launch
+import android.widget.Toast
 
 /**
  * Brain screen — view, search, create, and manage knowledge nodes.
@@ -38,26 +39,34 @@ fun BrainScreen(
     var showCreateDialog by remember { mutableStateOf(false) }
     var showImportExportSheet by remember { mutableStateOf(false) }
     var selectedNode by remember { mutableStateOf<BrainNode?>(null) }
-    var nodeCount by remember { mutableIntStateOf(0) }
+    var nodeCount by remember { mutableStateOf(0) }
     var allTags by remember { mutableStateOf<List<String>>(emptyList()) }
 
     // Load nodes
     LaunchedEffect(Unit) {
-        nodes = brainDb.getAllNodes()
-        nodeCount = brainDb.getNodeCount()
-        allTags = brainDb.getAllTags()
+        try {
+            nodes = brainDb.getAllNodes()
+            nodeCount = brainDb.getNodeCount()
+            allTags = brainDb.getAllTags()
+        } catch (e: Exception) {
+            Log.e("BrainScreen", "Failed to load nodes", e)
+        }
     }
 
     // React to changes
     LaunchedEffect(Unit) {
-        brainDb.nodesChanged.collect {
-            nodes = if (searchQuery.isBlank()) {
-                brainDb.getAllNodes()
-            } else {
-                brainDb.searchNodes(searchQuery)
+        try {
+            brainDb.nodesChanged.collect {
+                nodes = if (searchQuery.isBlank()) {
+                    brainDb.getAllNodes()
+                } else {
+                    brainDb.searchNodes(searchQuery)
+                }
+                nodeCount = brainDb.getNodeCount()
+                allTags = brainDb.getAllTags()
             }
-            nodeCount = brainDb.getNodeCount()
-            allTags = brainDb.getAllTags()
+        } catch (e: Exception) {
+            Log.e("BrainScreen", "Error in nodesChanged flow", e)
         }
     }
 

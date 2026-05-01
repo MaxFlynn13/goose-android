@@ -2,9 +2,10 @@ package io.github.gooseandroid.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -15,6 +16,8 @@ import androidx.navigation.compose.rememberNavController
 import io.github.gooseandroid.ui.brain.BrainScreen
 import io.github.gooseandroid.ui.chat.ChatScreen
 import io.github.gooseandroid.ui.chat.ChatViewModel
+import io.github.gooseandroid.ui.extensions.ExtensionsScreen
+import io.github.gooseandroid.ui.history.HistoryScreen
 import io.github.gooseandroid.ui.models.ModelsScreen
 import io.github.gooseandroid.ui.panel.SidePanel
 import io.github.gooseandroid.ui.panel.PanelSide
@@ -97,43 +100,46 @@ fun GooseNavigation() {
             }
 
             composable("history") {
-                // TODO: Session history screen
-                Scaffold(
-                    topBar = {
-                        TopAppBar(title = { Text("History") })
+                HistoryScreen(
+                    onBack = { navController.popBackStack() },
+                    onResumeSession = { sessionId ->
+                        // TODO: Resume session in ChatViewModel
+                        navController.navigate("chat")
                     }
-                ) { padding ->
-                    Box(modifier = Modifier.padding(padding).fillMaxSize()) {
-                        Text("Session history coming soon",
-                            modifier = Modifier.padding(16.dp))
-                    }
-                }
+                )
             }
 
             composable("extensions") {
-                // TODO: Extensions management screen
-                Scaffold(
-                    topBar = {
-                        TopAppBar(title = { Text("Extensions") })
-                    }
-                ) { padding ->
-                    Box(modifier = Modifier.padding(padding).fillMaxSize()) {
-                        Text("Extensions management coming soon",
-                            modifier = Modifier.padding(16.dp))
-                    }
-                }
+                ExtensionsScreen(onBack = { navController.popBackStack() })
             }
 
             composable("scheduler") {
-                // TODO: Task scheduler screen
+                // Scheduler is a future feature — show informative placeholder
                 Scaffold(
                     topBar = {
                         TopAppBar(title = { Text("Scheduler") })
                     }
                 ) { padding ->
-                    Box(modifier = Modifier.padding(padding).fillMaxSize()) {
-                        Text("Task scheduler coming soon",
-                            modifier = Modifier.padding(16.dp))
+                    Box(
+                        modifier = Modifier.padding(padding).fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.Schedule,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text("Scheduler", style = MaterialTheme.typography.titleMedium)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Schedule recurring tasks for Goose to run automatically.\nComing in a future update.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

@@ -83,30 +83,35 @@ class BrainDatabase(context: Context) : SQLiteOpenHelper(
             )
         """)
 
-        // Full-text search index
-        db.execSQL("""
-            CREATE VIRTUAL TABLE nodes_fts USING fts5(
-                title, content, content=$TABLE_NODES, content_rowid=rowid
-            )
-        """)
+        // Full-text search index (FTS5 — available on Android API 24+)
+        try {
+            db.execSQL("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
+                    title, content, content=$TABLE_NODES, content_rowid=rowid
+                )
+            """)
 
-        // Triggers to keep FTS in sync
-        db.execSQL("""
-            CREATE TRIGGER nodes_ai AFTER INSERT ON $TABLE_NODES BEGIN
-                INSERT INTO nodes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
-            END
-        """)
-        db.execSQL("""
-            CREATE TRIGGER nodes_ad AFTER DELETE ON $TABLE_NODES BEGIN
-                INSERT INTO nodes_fts(nodes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
-            END
-        """)
-        db.execSQL("""
-            CREATE TRIGGER nodes_au AFTER UPDATE ON $TABLE_NODES BEGIN
-                INSERT INTO nodes_fts(nodes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
-                INSERT INTO nodes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
-            END
-        """)
+            db.execSQL("""
+                CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON $TABLE_NODES BEGIN
+                    INSERT INTO nodes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+                END
+            """)
+            db.execSQL("""
+                CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON $TABLE_NODES BEGIN
+                    INSERT INTO nodes_fts(nodes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
+                END
+            """)
+            db.execSQL("""
+                CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON $TABLE_NODES BEGIN
+                    INSERT INTO nodes_fts(nodes_fts, rowid, title, content) VALUES('delete', old.rowid, old.title, old.content);
+                    INSERT INTO nodes_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+                END
+            """)
+            Log.i(TAG, "FTS5 index created successfully")
+        } catch (e: Exception) {
+            Log.w(TAG, "FTS5 not available, falling back to LIKE search", e)
+            // FTS5 is optional — search will use LIKE fallback
+        }
 
         Log.i(TAG, "Brain database created")
     }
@@ -219,16 +224,33 @@ class BrainDatabase(context: Context) : SQLiteOpenHelper(
 
     suspend fun searchNodes(query: String): List<BrainNode> = withContext(Dispatchers.IO) {
         val db = readableDatabase
-        val cursor = db.rawQuery("""
-            SELECT n.* FROM $TABLE_NODES n
-            INNER JOIN nodes_fts fts ON n.rowid = fts.rowid
-            WHERE nodes_fts MATCH ?
-            ORDER BY rank
-        """, arrayOf(query))
         val nodes = mutableListOf<BrainNode>()
-        cursor.use {
-            while (it.moveToNext()) {
-                cursorToNode(db, it)?.let { node -> nodes.add(node) }
+
+        // Try FTS5 first, fall back to LIKE
+        try {
+            val cursor = db.rawQuery("""
+                SELECT n.* FROM $TABLE_NODES n
+                INNER JOIN nodes_fts fts ON n.rowid = fts.rowid
+                WHERE nodes_fts MATCH ?
+                ORDER BY rank
+            """, arrayOf(query))
+            cursor.use {
+                while (it.moveToNext()) {
+                    cursorToNode(db, it)?.let { node -> nodes.add(node) }
+                }
+            }
+        } catch (e: Exception) {
+            // FTS5 not available — use LIKE search
+            val likeQuery = "%$query%"
+            val cursor = db.rawQuery("""
+                SELECT * FROM $TABLE_NODES
+                WHERE title LIKE ? OR content LIKE ?
+                ORDER BY updated_at DESC
+            """, arrayOf(likeQuery, likeQuery))
+            cursor.use {
+                while (it.moveToNext()) {
+                    cursorToNode(db, it)?.let { node -> nodes.add(node) }
+                }
             }
         }
         nodes

@@ -2,7 +2,6 @@ package io.github.gooseandroid.ui.settings
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -10,11 +9,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import io.github.gooseandroid.LocalModelManager
-import io.github.gooseandroid.ModelInfo
-import io.github.gooseandroid.ModelStatus
+import io.github.gooseandroid.data.SettingsKeys
+import io.github.gooseandroid.data.SettingsStore
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -23,6 +25,17 @@ fun SettingsScreen(
     onNavigateToModels: () -> Unit,
     onNavigateToAppearance: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val settingsStore = remember { SettingsStore(context) }
+    val scope = rememberCoroutineScope()
+
+    // Load persisted values
+    val anthropicKey by settingsStore.getString(SettingsKeys.ANTHROPIC_API_KEY).collectAsState(initial = "")
+    val openaiKey by settingsStore.getString(SettingsKeys.OPENAI_API_KEY).collectAsState(initial = "")
+    val googleKey by settingsStore.getString(SettingsKeys.GOOGLE_API_KEY).collectAsState(initial = "")
+    val devExtEnabled by settingsStore.getBoolean(SettingsKeys.EXTENSION_DEVELOPER, true).collectAsState(initial = true)
+    val memExtEnabled by settingsStore.getBoolean(SettingsKeys.EXTENSION_MEMORY, false).collectAsState(initial = false)
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -42,23 +55,21 @@ fun SettingsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            item {
-                SettingsSection("Provider")
-            }
+            item { SettingsSection("Provider") }
 
             item {
                 ProviderCard(
                     title = "Cloud LLM",
                     description = "Anthropic, OpenAI, Google, OpenRouter",
                     icon = Icons.Default.Cloud,
-                    onClick = { /* TODO: Provider config */ }
+                    onClick = { /* Expand inline below */ }
                 )
             }
 
             item {
                 ProviderCard(
                     title = "Local Models",
-                    description = "On-device inference via LiteRT",
+                    description = "On-device inference via LiteRT / GGUF",
                     icon = Icons.Default.PhoneAndroid,
                     onClick = onNavigateToModels
                 )
@@ -70,23 +81,26 @@ fun SettingsScreen(
             }
 
             item {
-                ApiKeyField(
+                PersistentApiKeyField(
                     label = "Anthropic API Key",
-                    keyName = "ANTHROPIC_API_KEY"
+                    value = anthropicKey,
+                    onSave = { scope.launch { settingsStore.setString(SettingsKeys.ANTHROPIC_API_KEY, it) } }
                 )
             }
 
             item {
-                ApiKeyField(
+                PersistentApiKeyField(
                     label = "OpenAI API Key",
-                    keyName = "OPENAI_API_KEY"
+                    value = openaiKey,
+                    onSave = { scope.launch { settingsStore.setString(SettingsKeys.OPENAI_API_KEY, it) } }
                 )
             }
 
             item {
-                ApiKeyField(
+                PersistentApiKeyField(
                     label = "Google AI API Key",
-                    keyName = "GOOGLE_API_KEY"
+                    value = googleKey,
+                    onSave = { scope.launch { settingsStore.setString(SettingsKeys.GOOGLE_API_KEY, it) } }
                 )
             }
 
@@ -110,20 +124,20 @@ fun SettingsScreen(
             }
 
             item {
-                ExtensionToggle(
+                PersistentExtensionToggle(
                     name = "Developer",
                     description = "Shell, file edit, tree tools",
-                    enabled = true,
-                    onToggle = { /* TODO */ }
+                    enabled = devExtEnabled,
+                    onToggle = { scope.launch { settingsStore.setBoolean(SettingsKeys.EXTENSION_DEVELOPER, it) } }
                 )
             }
 
             item {
-                ExtensionToggle(
+                PersistentExtensionToggle(
                     name = "Memory",
                     description = "Persistent preferences across sessions",
-                    enabled = false,
-                    onToggle = { /* TODO */ }
+                    enabled = memExtEnabled,
+                    onToggle = { scope.launch { settingsStore.setBoolean(SettingsKeys.EXTENSION_MEMORY, it) } }
                 )
             }
         }
@@ -148,44 +162,40 @@ private fun ProviderCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     onClick: () -> Unit
 ) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
-            )
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(
-                    description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Icon(Icons.Default.ChevronRight, contentDescription = null)
         }
     }
 }
 
+/**
+ * API key field that persists on every change (debounced).
+ */
 @Composable
-private fun ApiKeyField(label: String, keyName: String) {
-    var value by remember { mutableStateOf("") }
+private fun PersistentApiKeyField(
+    label: String,
+    value: String,
+    onSave: (String) -> Unit
+) {
+    var localValue by remember(value) { mutableStateOf(value) }
     var visible by remember { mutableStateOf(false) }
 
     OutlinedTextField(
-        value = value,
-        onValueChange = { value = it },
+        value = localValue,
+        onValueChange = {
+            localValue = it
+            onSave(it) // Save immediately
+        },
         label = { Text(label) },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
@@ -197,45 +207,27 @@ private fun ApiKeyField(label: String, keyName: String) {
                 )
             }
         },
-        visualTransformation = if (visible) {
-            androidx.compose.ui.text.input.VisualTransformation.None
-        } else {
-            androidx.compose.ui.text.input.PasswordVisualTransformation()
-        }
+        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation()
     )
 }
 
 @Composable
-private fun ExtensionToggle(
+private fun PersistentExtensionToggle(
     name: String,
     description: String,
     enabled: Boolean,
     onToggle: (Boolean) -> Unit
 ) {
-    var isEnabled by remember { mutableStateOf(enabled) }
-
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(name, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Switch(
-                checked = isEnabled,
-                onCheckedChange = {
-                    isEnabled = it
-                    onToggle(it)
-                }
-            )
+            Switch(checked = enabled, onCheckedChange = onToggle)
         }
     }
 }

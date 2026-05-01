@@ -19,9 +19,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.gooseandroid.data.SettingsKeys
+import io.github.gooseandroid.data.SettingsStore
+import kotlinx.coroutines.launch
 
 /**
  * UI Customization settings.
@@ -72,7 +76,24 @@ fun AppearanceSettingsScreen(
     onThemeChanged: (AppTheme) -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
+    val settingsStore = remember { SettingsStore(context) }
+    val scope = rememberCoroutineScope()
     var theme by remember { mutableStateOf(currentTheme) }
+
+    // Persist every change
+    fun saveAndApply(newTheme: AppTheme) {
+        theme = newTheme
+        onThemeChanged(newTheme)
+        scope.launch {
+            settingsStore.setInt(SettingsKeys.PRIMARY_COLOR, newTheme.primaryColor.toArgb())
+            settingsStore.setInt(SettingsKeys.SECONDARY_COLOR, newTheme.secondaryColor.toArgb())
+            settingsStore.setInt(SettingsKeys.ACCENT_COLOR, newTheme.accentColor.toArgb())
+            settingsStore.setFloat(SettingsKeys.TEXT_SCALE, newTheme.textScale)
+            settingsStore.setString(SettingsKeys.THEME_MODE, newTheme.themeMode.name)
+            settingsStore.setString(SettingsKeys.PANEL_SIDE, newTheme.panelSide.name)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -106,7 +127,7 @@ fun AppearanceSettingsScreen(
                             selected = theme.themeMode == mode,
                             onClick = {
                                 theme = theme.copy(themeMode = mode)
-                                onThemeChanged(theme)
+                                saveAndApply(theme)
                             },
                             label = { Text(mode.name.lowercase().replaceFirstChar { it.uppercase() }) },
                             leadingIcon = {
@@ -133,7 +154,7 @@ fun AppearanceSettingsScreen(
                     currentColor = theme.primaryColor,
                     onColorSelected = {
                         theme = theme.copy(primaryColor = it)
-                        onThemeChanged(theme)
+                        saveAndApply(theme)
                     }
                 )
             }
@@ -146,7 +167,7 @@ fun AppearanceSettingsScreen(
                     currentColor = theme.secondaryColor,
                     onColorSelected = {
                         theme = theme.copy(secondaryColor = it)
-                        onThemeChanged(theme)
+                        saveAndApply(theme)
                     }
                 )
             }
@@ -159,7 +180,7 @@ fun AppearanceSettingsScreen(
                     currentColor = theme.accentColor,
                     onColorSelected = {
                         theme = theme.copy(accentColor = it)
-                        onThemeChanged(theme)
+                        saveAndApply(theme)
                     }
                 )
             }
@@ -172,7 +193,7 @@ fun AppearanceSettingsScreen(
                     currentScale = theme.textScale,
                     onScaleChanged = {
                         theme = theme.copy(textScale = it)
-                        onThemeChanged(theme)
+                        saveAndApply(theme)
                     }
                 )
             }
@@ -189,7 +210,7 @@ fun AppearanceSettingsScreen(
                         selected = theme.panelSide == PanelSide.LEFT,
                         onClick = {
                             theme = theme.copy(panelSide = PanelSide.LEFT)
-                            onThemeChanged(theme)
+                            saveAndApply(theme)
                         },
                         label = { Text("Left") },
                         leadingIcon = { Icon(Icons.Default.AlignHorizontalLeft, null, Modifier.size(16.dp)) }
@@ -198,7 +219,7 @@ fun AppearanceSettingsScreen(
                         selected = theme.panelSide == PanelSide.RIGHT,
                         onClick = {
                             theme = theme.copy(panelSide = PanelSide.RIGHT)
-                            onThemeChanged(theme)
+                            saveAndApply(theme)
                         },
                         label = { Text("Right") },
                         leadingIcon = { Icon(Icons.Default.AlignHorizontalRight, null, Modifier.size(16.dp)) }

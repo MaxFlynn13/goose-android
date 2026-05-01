@@ -14,7 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import io.github.gooseandroid.*
+import io.github.gooseandroid.data.SettingsKeys
+import io.github.gooseandroid.data.SettingsStore
+import kotlinx.coroutines.launch
 
 /**
  * Model management screen — download, manage, and select local LLMs.
@@ -29,7 +33,10 @@ fun ModelsScreen(
 ) {
     val context = LocalContext.current
     val modelManager = remember { LocalModelManager(context) }
+    val settingsStore = remember { SettingsStore(context) }
+    val scope = rememberCoroutineScope()
     val downloads by modelManager.downloads.collectAsState()
+    val activeModelId by settingsStore.getLocalModelId().collectAsState(initial = "")
 
     // Refresh model list when downloads complete
     val models = remember(downloads) { modelManager.getAvailableModels() }
@@ -80,10 +87,17 @@ fun ModelsScreen(
                 ModelCard(
                     modelStatus = modelStatus,
                     downloadState = downloads[modelStatus.model.id],
+                    isActive = activeModelId == modelStatus.model.id,
                     modelManager = modelManager,
                     onDownload = { modelManager.downloadModel(it) },
                     onCancel = { modelManager.cancelDownload(it) },
-                    onDelete = { modelManager.deleteModel(it.id) }
+                    onDelete = { modelManager.deleteModel(it.id) },
+                    onSelect = {
+                        scope.launch {
+                            settingsStore.setLocalModelId(it.id)
+                            Toast.makeText(context, "${it.name} selected", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 )
             }
 
@@ -104,10 +118,17 @@ fun ModelsScreen(
                     ModelCard(
                         modelStatus = modelStatus,
                         downloadState = downloads[modelStatus.model.id],
+                        isActive = activeModelId == modelStatus.model.id,
                         modelManager = modelManager,
                         onDownload = { modelManager.downloadModel(it) },
                         onCancel = { modelManager.cancelDownload(it) },
-                        onDelete = { modelManager.deleteModel(it.id) }
+                        onDelete = { modelManager.deleteModel(it.id) },
+                        onSelect = {
+                            scope.launch {
+                                settingsStore.setLocalModelId(it.id)
+                                Toast.makeText(context, "${it.name} selected", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     )
                 }
             }
@@ -189,10 +210,12 @@ private fun HardwareInfoCard() {
 private fun ModelCard(
     modelStatus: ModelStatus,
     downloadState: DownloadState?,
+    isActive: Boolean = false,
     modelManager: LocalModelManager,
     onDownload: (ModelInfo) -> Unit,
     onCancel: (ModelInfo) -> Unit,
-    onDelete: (ModelInfo) -> Unit
+    onDelete: (ModelInfo) -> Unit,
+    onSelect: (ModelInfo) -> Unit = {}
 ) {
     val model = modelStatus.model
     val compatibility = remember { modelManager.canRunModel(model) }
@@ -223,10 +246,10 @@ private fun ModelCard(
                 if (isDownloaded) {
                     AssistChip(
                         onClick = {},
-                        label = { Text("Ready") },
+                        label = { Text(if (isActive) "Active" else "Ready") },
                         leadingIcon = {
                             Icon(
-                                Icons.Default.CheckCircle,
+                                if (isActive) Icons.Default.Star else Icons.Default.CheckCircle,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -327,8 +350,11 @@ private fun ModelCard(
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Delete")
                         }
-                        Button(onClick = { /* TODO: Set as active model */ }) {
-                            Text("Use Model")
+                        Button(
+                            onClick = { onSelect(model) },
+                            enabled = !isActive
+                        ) {
+                            Text(if (isActive) "✓ Active" else "Use Model")
                         }
                     }
                 }
