@@ -157,31 +157,92 @@ jobs:
           # Fix sys-info crate: its C code uses index() which is missing on Android bionic.
           # We patch the source directly in the cargo registry after fetching.
 
-          # Fetch all dependencies first so we can patch sys-info
+          # Fetch all dependencies first so we can patch problematic crates
           cargo fetch --target aarch64-linux-android
 
-          # Patch sys-info: replace index() with strchr() which is available on Android
-          # index() is a deprecated POSIX function, strchr() is the standard replacement
+          # === Patch 1: sys-info ===
+          # Replace index() with strchr() - index() not available on Android bionic
           SYS_INFO_SRC=$(find ~/.cargo/registry/src -path "*/sys-info-*/c/linux.c" 2>/dev/null | head -1)
           if [ -n "$SYS_INFO_SRC" ]; then
-            echo "Patching sys-info at: $SYS_INFO_SRC"
-            # Replace index() calls with strchr() - they have identical semantics
+            echo "Patching sys-info: index() → strchr()"
             sed -i 's/index(/strchr(/g' "$SYS_INFO_SRC"
-            echo "Patched. Verifying no more index() calls:"
-            grep -n "index\b" "$SYS_INFO_SRC" || echo "  Clean ✓"
-          else
-            echo "WARNING: sys-info source not found in cargo registry"
+            # Clear checksum so cargo accepts the patch
+            SYS_INFO_PKG=$(echo "$SYS_INFO_SRC" | sed 's|/c/linux.c||')
+            echo '{"files":{}}' > "$SYS_INFO_PKG/.cargo-checksum.json"
           fi
 
-          # Also need to remove the .cargo-checksum.json or cargo will reject the patch
-          SYS_INFO_DIR=$(dirname "$SYS_INFO_SRC" 2>/dev/null)
-          if [ -n "$SYS_INFO_DIR" ]; then
-            CHECKSUM_FILE="$(dirname "$SYS_INFO_DIR")/.cargo-checksum.json"
-            if [ -f "$CHECKSUM_FILE" ]; then
-              # Replace the checksum with an empty one so cargo doesn't reject our patch
-              echo '{"files":{}}' > "$CHECKSUM_FILE"
-              echo "Cleared cargo checksum for sys-info"
-            fi
+          # === Patch 2: arboard (clipboard) ===
+          # arboard v3.6.1 doesn't support Android. Rather than patching its complex
+          # platform module system, we replace the entire lib.rs with a no-op stub.
+          # Clipboard is only used in goose for OAuth device flow (copy verification code)
+          # which is non-essential on Android.
+          ARBOARD_PKG=$(find ~/.cargo/registry/src -maxdepth 2 -name "arboard-*" -type d 2>/dev/null | head -1)
+          if [ -n "$ARBOARD_PKG" ]; then
+            echo "Patching arboard: replacing with no-op stub for Android"
+            cat > "$ARBOARD_PKG/src/lib.rs" << 'STUBEOF'
+          //! No-op arboard stub for Android.
+          //! Android clipboard access requires JNI which isn't available in this context.
+          //! The goose code wraps clipboard access in if-let-Ok so this gracefully degrades.
+
+          use std::borrow::Cow;
+
+          #[derive(Debug)]
+          pub enum Error {
+              ContentNotAvailable,
+              ClipboardNotSupported,
+              Unknown(String),
+          }
+
+          impl std::fmt::Display for Error {
+              fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                  match self {
+                      Error::ContentNotAvailable => write!(f, "Content not available"),
+                      Error::ClipboardNotSupported => write!(f, "Clipboard not supported on this platform"),
+                      Error::Unknown(s) => write!(f, "Unknown error: {}", s),
+                  }
+              }
+          }
+          impl std::error::Error for Error {}
+
+          pub struct Clipboard;
+
+          impl Clipboard {
+              pub fn new() -> Result<Self, Error> {
+                  Ok(Clipboard)
+              }
+          }
+
+          pub trait Get {
+              fn text(&self) -> Result<String, Error> {
+                  Err(Error::ClipboardNotSupported)
+              }
+          }
+
+          pub trait Set {
+              fn text(&mut self, _text: impl Into<Cow<'_, str>>) -> Result<(), Error> {
+                  Err(Error::ClipboardNotSupported)
+              }
+              fn html(&mut self, _html: impl Into<Cow<'_, str>>, _alt: Option<impl Into<Cow<'_, str>>>) -> Result<(), Error> {
+                  Err(Error::ClipboardNotSupported)
+              }
+          }
+
+          pub trait Clear {
+              fn clear(&mut self) -> Result<(), Error> {
+                  Err(Error::ClipboardNotSupported)
+              }
+          }
+
+          impl Get for Clipboard {}
+          impl Set for Clipboard {}
+          impl Clear for Clipboard {}
+
+          // Re-export types that goose code might reference
+          pub use Error as ArboardError;
+          STUBEOF
+
+            echo '{"files":{}}' > "$ARBOARD_PKG/.cargo-checksum.json"
+            echo "arboard stubbed ✓"
           fi
 
           # Build with minimal features for Android
