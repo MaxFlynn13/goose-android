@@ -1,6 +1,5 @@
 package io.github.gooseandroid.ui.chat
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -15,7 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -168,8 +166,7 @@ private fun ChatMessageBubble(message: ChatMessage) {
 private fun ToolCallChip(toolCall: ToolCall) {
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+        color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.padding(top = 4.dp)
     ) {
         Row(

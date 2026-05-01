@@ -67,7 +67,7 @@ class GooseService : Service() {
 
     fun getPort(): Int = port
 
-    fun isRunning(): Boolean = gooseProcess?.isAlive == true
+    fun isRunning(): Boolean = gooseProcess?.isAlive == true || GoosePortHolder.localOnlyMode
 
     private suspend fun startGoose() {
         try {
@@ -76,8 +76,10 @@ class GooseService : Service() {
 
             val binaryFile = extractBinary()
             if (binaryFile == null) {
-                Log.e(TAG, "Failed to locate goose binary")
-                updateNotification("Goose failed to start: binary not found")
+                Log.w(TAG, "Goose binary not available — starting in local-only mode")
+                // Start the LiteRT inference server as fallback
+                // This allows the app to work with local models even without the goose binary
+                startLocalOnlyMode()
                 return
             }
 
@@ -134,19 +136,49 @@ class GooseService : Service() {
         }
     }
 
+    /**
+     * Start in local-only mode when the goose binary isn't available.
+     * Launches the LiteRT inference server so the app can still function
+     * with downloaded local models, or show a helpful setup screen.
+     */
+    private suspend fun startLocalOnlyMode() {
+        val modelManager = LocalModelManager(this)
+        val liteRTServer = LiteRTInferenceServer(modelManager)
+        port = liteRTServer.start()
+        GoosePortHolder.port = port
+        GoosePortHolder.localOnlyMode = true
+        Log.i(TAG, "Local-only mode active on port $port")
+        updateNotification("Goose (local mode) — download models or configure cloud API")
+    }
+
     private fun extractBinary(): File? {
         // The binary is shipped as libgoose.so in jniLibs/arm64-v8a/
         // Android extracts it to the native library directory
         val nativeLibDir = applicationInfo.nativeLibraryDir
         val binary = File(nativeLibDir, "libgoose.so")
 
-        if (binary.exists() && binary.canExecute()) {
-            Log.i(TAG, "Found goose binary at: ${binary.absolutePath}")
-            return binary
+        if (!binary.exists()) {
+            Log.e(TAG, "Binary not found at: ${binary.absolutePath}")
+            return null
         }
 
-        Log.e(TAG, "Binary not found or not executable at: ${binary.absolutePath}")
-        return null
+        // Check if it's a real binary (not the 4-byte placeholder from smoke test)
+        if (binary.length() < 1000) {
+            Log.w(TAG, "Binary too small (${binary.length()} bytes) - likely placeholder")
+            return null
+        }
+
+        if (!binary.canExecute()) {
+            // Try to set executable permission
+            val success = binary.setExecutable(true)
+            if (!success) {
+                Log.e(TAG, "Cannot set executable permission on: ${binary.absolutePath}")
+                return null
+            }
+        }
+
+        Log.i(TAG, "Found goose binary at: ${binary.absolutePath} (${binary.length()} bytes)")
+        return binary
     }
 
     private fun buildEnvironment(homeDir: File): Map<String, String> {

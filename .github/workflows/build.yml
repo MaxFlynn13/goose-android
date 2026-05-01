@@ -11,12 +11,14 @@ on:
 env:
   GOOSE_REPO: "https://github.com/block/goose.git"
   GOOSE_REF: "main"
+  NDK_VERSION: "27.2.12479018"
+  ANDROID_API_LEVEL: "34"
 
 jobs:
   build-goose-binary:
     name: Cross-compile Goose for Android (arm64)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
@@ -30,8 +32,21 @@ jobs:
         with:
           targets: aarch64-linux-android
 
-      - name: Install cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Setup Android NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: |
+          sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler cmake
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -40,38 +55,45 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             goose-src/target
-          key: ${{ runner.os }}-cargo-android-arm64-${{ hashFiles('goose-src/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-ndk-arm64-${{ hashFiles('goose-src/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-android-arm64-
+            ${{ runner.os }}-cargo-ndk-arm64-
 
-      - name: Apply Android patches
+      - name: Analyze and patch goose source
         run: |
           chmod +x scripts/patch-goose-build.sh
           ./scripts/patch-goose-build.sh goose-src
 
       - name: Build goose binary for Android arm64
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: |
           cd goose-src
-          # local-inference excluded: LiteRT handles on-device models natively in Kotlin
-          # code-mode excluded: V8 cross-compilation too complex for mobile
-          # aws-providers excluded: not needed for mobile use case
-          cross build --release -p goose-cli \
-            --target aarch64-linux-android \
+
+          # cargo-ndk handles all the NDK toolchain setup
+          cargo ndk \
+            -t arm64-v8a \
+            -p ${{ env.ANDROID_API_LEVEL }} \
+            build --release -p goose-cli \
             --no-default-features \
             --features "rustls-tls,telemetry,disable-update"
 
-      - name: Strip and rename binary
+      - name: Strip and package binary
         run: |
-          STRIP=$(find ${ANDROID_NDK_HOME:-/usr/local/lib/android/sdk/ndk} -name "llvm-strip" 2>/dev/null | head -1)
-          if [ -z "$STRIP" ]; then
-            echo "Warning: llvm-strip not found, skipping strip"
-            STRIP="true"
+          # Find the built binary
+          BINARY="goose-src/target/aarch64-linux-android/release/goose"
+          if [ ! -f "$BINARY" ]; then
+            echo "Binary not found at expected path, searching..."
+            find goose-src/target -name "goose" -type f -executable | head -5
+            exit 1
           fi
 
-          cp goose-src/target/aarch64-linux-android/release/goose libgoose.so
-          $STRIP libgoose.so || echo "Strip failed (non-fatal)"
+          # Strip with NDK's llvm-strip
+          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          cp "$BINARY" libgoose.so
+          "$STRIP" libgoose.so || echo "Strip failed (non-fatal)"
 
-          echo "Binary info:"
+          echo "=== Binary info ==="
           ls -lh libgoose.so
           file libgoose.so
 

@@ -35,6 +35,22 @@ class ChatViewModel : ViewModel() {
 
     private fun connectToGoose() {
         viewModelScope.launch {
+            // Check if we're in local-only mode (no goose binary)
+            if (GoosePortHolder.localOnlyMode) {
+                Log.i(TAG, "Running in local-only mode")
+                addSystemMessage(
+                    "🪿 Welcome to Goose!\n\n" +
+                    "The Goose backend binary isn't installed yet. You can:\n\n" +
+                    "• **Configure a cloud API** — Go to Settings and add an API key " +
+                    "(Anthropic, OpenAI, or Google)\n\n" +
+                    "• **Download a local model** — Go to Settings → Local Models " +
+                    "to run AI completely on-device\n\n" +
+                    "Once the full build is ready, Goose will have shell access, " +
+                    "file editing, and all MCP extensions."
+                )
+                return@launch
+            }
+
             val port = GoosePortHolder.port
             val url = "ws://127.0.0.1:$port/acp"
             Log.i(TAG, "Connecting to goose at $url")
@@ -62,7 +78,7 @@ class ChatViewModel : ViewModel() {
                 }
             }.onFailure { error ->
                 Log.e(TAG, "Failed to connect to goose", error)
-                addSystemMessage("Failed to connect to Goose: ${error.message}")
+                addSystemMessage("Unable to connect to Goose backend: ${error.message}\n\nGo to Settings to configure a provider.")
             }
         }
     }

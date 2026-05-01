@@ -21,11 +21,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.viewmodel.compose.viewModel
-import io.github.gooseandroid.ui.chat.ChatScreen
-import io.github.gooseandroid.ui.chat.ChatViewModel
+
+import io.github.gooseandroid.ui.GooseNavigation
 import io.github.gooseandroid.ui.theme.GooseTheme
-import kotlinx.coroutines.delay
 
 /**
  * Main activity — native Jetpack Compose UI for Goose.
@@ -86,10 +84,17 @@ class MainActivity : ComponentActivity() {
 
     private fun pollServiceReady() {
         Thread {
-            val timeout = 35_000L
+            val timeout = 15_000L
             val start = System.currentTimeMillis()
 
             while (System.currentTimeMillis() - start < timeout) {
+                // Check if local-only mode was activated (binary missing)
+                if (GoosePortHolder.localOnlyMode) {
+                    Log.i(TAG, "Local-only mode detected — showing UI")
+                    runOnUiThread { serviceReady.value = true }
+                    return@Thread
+                }
+
                 val service = gooseService
                 if (service != null && service.isRunning()) {
                     GoosePortHolder.port = service.getPort()
@@ -99,8 +104,13 @@ class MainActivity : ComponentActivity() {
                 Thread.sleep(200)
             }
 
-            runOnUiThread {
-                serviceError.value = "Goose failed to start within timeout"
+            // If we timed out but local-only mode is active, still show UI
+            if (GoosePortHolder.localOnlyMode) {
+                runOnUiThread { serviceReady.value = true }
+            } else {
+                runOnUiThread {
+                    serviceError.value = "Goose backend not available. Configure a cloud API key in Settings, or download a local model."
+                }
             }
         }.start()
     }
@@ -164,10 +174,7 @@ fun GooseApp(
         when {
             serviceError != null -> ErrorScreen(serviceError, onRetry)
             !serviceReady -> LoadingScreen()
-            else -> {
-                val chatViewModel: ChatViewModel = viewModel()
-                ChatScreen(viewModel = chatViewModel)
-            }
+            else -> GooseNavigation()
         }
     }
 }
