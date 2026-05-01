@@ -1,0 +1,196 @@
+name: Build Goose Android APK
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GOOSE_VERSION: "1.33.0"
+  GOOSE_REPO: "https://github.com/block/goose.git"
+  GOOSE_REF: "main"
+  ANDROID_MIN_SDK: "34"
+  ANDROID_TARGET_SDK: "34"
+
+jobs:
+  build-goose-binary:
+    name: Cross-compile Goose for Android (arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone Goose source
+        run: |
+          git clone --depth 1 --branch ${{ env.GOOSE_REF }} ${{ env.GOOSE_REPO }} goose-src
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            goose-src/target
+          key: ${{ runner.os }}-cargo-android-arm64-${{ hashFiles('goose-src/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-android-arm64-
+
+      - name: Apply Android patches
+        run: |
+          cd goose-src
+          # Disable keyring on Android (use file-based secrets)
+          # The code already supports GOOSE_DISABLE_KEYRING=true
+          # We just need to ensure the build compiles for Android target
+
+          # Create a Cross.toml entry for Android if not present
+          cat >> Cross.toml << 'EOF'
+
+          [target.aarch64-linux-android]
+          xargo = false
+          EOF
+
+      - name: Build goose binary for Android arm64
+        run: |
+          cd goose-src
+          cross build --release -p goose-cli \
+            --target aarch64-linux-android \
+            --no-default-features \
+            --features "rustls-tls,telemetry,disable-update"
+
+      - name: Strip and rename binary
+        run: |
+          # Find the Android NDK strip tool
+          STRIP=$(find $ANDROID_NDK_HOME -name "llvm-strip" | head -1)
+          if [ -z "$STRIP" ]; then
+            STRIP="strip"
+          fi
+
+          cp goose-src/target/aarch64-linux-android/release/goose libgoose.so
+          $STRIP libgoose.so || true
+
+          ls -lh libgoose.so
+          file libgoose.so
+
+      - name: Upload goose binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: goose-binary-arm64
+          path: libgoose.so
+          retention-days: 7
+
+  build-frontend:
+    name: Build Goose Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone Goose source
+        run: |
+          git clone --depth 1 --branch ${{ env.GOOSE_REF }} ${{ env.GOOSE_REPO }} goose-src
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install frontend dependencies
+        run: |
+          cd goose-src/ui
+          pnpm install --frozen-lockfile
+
+      - name: Build SDK
+        run: |
+          cd goose-src/ui/sdk
+          pnpm build
+
+      - name: Build goose2 frontend
+        run: |
+          cd goose-src/ui/goose2
+          # Set environment for Android WebView build
+          echo "VITE_PLATFORM=android" >> .env
+          pnpm build
+
+      - name: Copy frontend adapter
+        run: |
+          # Overlay our Android-specific adapter files
+          cp frontend/android-bridge.ts goose-src/ui/goose2/dist/ || true
+          cp frontend/platform-shim.js goose-src/ui/goose2/dist/ || true
+
+      - name: Upload frontend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: goose-frontend
+          path: goose-src/ui/goose2/dist/
+          retention-days: 7
+
+  build-apk:
+    name: Assemble Android APK
+    runs-on: ubuntu-latest
+    needs: [build-goose-binary, build-frontend]
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Download goose binary
+        uses: actions/download-artifact@v4
+        with:
+          name: goose-binary-arm64
+          path: app/src/main/jniLibs/arm64-v8a/
+
+      - name: Download frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: goose-frontend
+          path: app/src/main/assets/web/
+
+      - name: Inject platform shim into frontend
+        run: |
+          cp frontend/platform-shim.js app/src/main/assets/web/platform-shim.js
+          # Inject shim as first script in index.html
+          sed -i 's|<head>|<head><script src="platform-shim.js"></script>|' app/src/main/assets/web/index.html
+          # Fix paths for file:// loading
+          sed -i 's|href="/|href="./|g' app/src/main/assets/web/index.html
+          sed -i 's|src="/|src="./|g' app/src/main/assets/web/index.html
+
+      - name: Build APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: goose-android-arm64
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30

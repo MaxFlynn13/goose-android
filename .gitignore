@@ -1,0 +1,35 @@
+# Android build
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+
+# Goose binary (built in CI, not committed)
+app/src/main/jniLibs/arm64-v8a/libgoose.so
+app/src/main/jniLibs/x86_64/libgoose.so
+
+# Frontend build output (built in CI, not committed)
+app/src/main/assets/web/
+
+# Goose source (cloned in CI)
+goose-src/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
+*.iml

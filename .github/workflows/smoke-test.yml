@@ -1,0 +1,285 @@
+name: Smoke Test APK (No Goose Binary)
+
+# This workflow builds a minimal APK that validates:
+# 1. The Android app shell compiles
+# 2. The WebView loads
+# 3. The service lifecycle works
+#
+# It does NOT include the goose binary - instead it shows a
+# "waiting for goose" screen. Use this to validate the Android
+# side before tackling the Rust cross-compilation.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'frontend/**'
+      - '*.gradle.kts'
+      - 'gradle/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-smoke-apk:
+    name: Build Smoke Test APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Create placeholder frontend
+        run: |
+          mkdir -p app/src/main/assets/web
+          cat > app/src/main/assets/web/index.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>Goose Android - Smoke Test</title>
+              <style>
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  body {
+                      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                      background: #1a1a2e;
+                      color: #e0e0e0;
+                      min-height: 100vh;
+                      display: flex;
+                      flex-direction: column;
+                      align-items: center;
+                      justify-content: center;
+                      padding: 2rem;
+                  }
+                  .container { text-align: center; max-width: 400px; }
+                  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #ff6b35; }
+                  h2 { font-size: 1.2rem; font-weight: 400; margin-bottom: 2rem; color: #aaa; }
+                  .status {
+                      background: #2a2a4a;
+                      border-radius: 12px;
+                      padding: 1.5rem;
+                      margin-bottom: 1.5rem;
+                  }
+                  .status-item {
+                      display: flex;
+                      justify-content: space-between;
+                      padding: 0.5rem 0;
+                      border-bottom: 1px solid #333;
+                  }
+                  .status-item:last-child { border-bottom: none; }
+                  .check { color: #4caf50; }
+                  .warn { color: #ff9800; }
+                  .fail { color: #f44336; }
+                  .info { font-size: 0.85rem; color: #888; margin-top: 1rem; }
+                  button {
+                      margin-top: 1rem;
+                      padding: 0.75rem 2rem;
+                      background: #ff6b35;
+                      color: white;
+                      border: none;
+                      border-radius: 8px;
+                      font-size: 1rem;
+                      cursor: pointer;
+                  }
+                  button:active { background: #e55a25; }
+                  #log {
+                      margin-top: 1.5rem;
+                      background: #111;
+                      border-radius: 8px;
+                      padding: 1rem;
+                      text-align: left;
+                      font-family: monospace;
+                      font-size: 0.75rem;
+                      max-height: 200px;
+                      overflow-y: auto;
+                      color: #0f0;
+                  }
+              </style>
+          </head>
+          <body>
+              <div class="container">
+                  <h1>🪿 Goose</h1>
+                  <h2>Android Smoke Test</h2>
+
+                  <div class="status">
+                      <div class="status-item">
+                          <span>WebView</span>
+                          <span class="check" id="s-webview">✓ Working</span>
+                      </div>
+                      <div class="status-item">
+                          <span>JavaScript Bridge</span>
+                          <span id="s-bridge">checking...</span>
+                      </div>
+                      <div class="status-item">
+                          <span>Platform</span>
+                          <span id="s-platform">detecting...</span>
+                      </div>
+                      <div class="status-item">
+                          <span>Goose Port</span>
+                          <span id="s-port">—</span>
+                      </div>
+                      <div class="status-item">
+                          <span>WebSocket</span>
+                          <span id="s-ws">not tested</span>
+                      </div>
+                  </div>
+
+                  <button onclick="testConnection()">Test WebSocket Connection</button>
+                  <button onclick="testBridge()">Test Android Bridge</button>
+
+                  <div id="log"></div>
+
+                  <p class="info">
+                      This is a smoke test build. The full Goose frontend
+                      will replace this page once the Rust binary compiles.
+                  </p>
+              </div>
+
+              <script>
+                  function log(msg) {
+                      const el = document.getElementById('log');
+                      const time = new Date().toLocaleTimeString();
+                      el.innerHTML += `[${time}] ${msg}\n`;
+                      el.scrollTop = el.scrollHeight;
+                      console.log(msg);
+                  }
+
+                  // Check Android bridge
+                  function testBridge() {
+                      const bridgeEl = document.getElementById('s-bridge');
+                      if (window.AndroidBridge) {
+                          bridgeEl.textContent = '✓ Connected';
+                          bridgeEl.className = 'check';
+                          log('AndroidBridge available');
+                          log('Platform: ' + window.AndroidBridge.getPlatform());
+                          log('Arch: ' + window.AndroidBridge.getArch());
+                          log('Version: ' + window.AndroidBridge.getVersion());
+                          log('Home: ' + window.AndroidBridge.getHomeDir());
+                      } else {
+                          bridgeEl.textContent = '✗ Not found';
+                          bridgeEl.className = 'fail';
+                          log('ERROR: AndroidBridge not available (running in browser?)');
+                      }
+                  }
+
+                  // Check platform
+                  (function() {
+                      const platformEl = document.getElementById('s-platform');
+                      const portEl = document.getElementById('s-port');
+
+                      if (window.GOOSE_PLATFORM) {
+                          platformEl.textContent = window.GOOSE_PLATFORM;
+                          platformEl.className = 'check';
+                      } else {
+                          platformEl.textContent = 'browser (no injection)';
+                          platformEl.className = 'warn';
+                      }
+
+                      if (window.GOOSE_PORT) {
+                          portEl.textContent = window.GOOSE_PORT;
+                          portEl.className = 'check';
+                      } else {
+                          portEl.textContent = 'not set';
+                          portEl.className = 'warn';
+                      }
+
+                      // Auto-test bridge after a short delay
+                      setTimeout(testBridge, 500);
+                  })();
+
+                  // Test WebSocket connection to goose
+                  function testConnection() {
+                      const wsEl = document.getElementById('s-ws');
+                      const port = window.GOOSE_PORT || 3284;
+                      const url = `ws://127.0.0.1:${port}/acp`;
+
+                      log(`Connecting to ${url}...`);
+                      wsEl.textContent = 'connecting...';
+                      wsEl.className = 'warn';
+
+                      try {
+                          const ws = new WebSocket(url);
+
+                          ws.onopen = function() {
+                              wsEl.textContent = '✓ Connected!';
+                              wsEl.className = 'check';
+                              log('WebSocket connected! Goose is running.');
+
+                              // Send a test initialize message
+                              const initMsg = {
+                                  jsonrpc: '2.0',
+                                  id: 1,
+                                  method: 'initialize',
+                                  params: {
+                                      protocolVersion: '2025-03-26',
+                                      clientInfo: { name: 'goose-android-smoke', version: '0.1.0' },
+                                      clientCapabilities: {}
+                                  }
+                              };
+                              ws.send(JSON.stringify(initMsg));
+                              log('Sent initialize request');
+                          };
+
+                          ws.onmessage = function(event) {
+                              log('Received: ' + event.data.substring(0, 100) + '...');
+                              ws.close();
+                          };
+
+                          ws.onerror = function(err) {
+                              wsEl.textContent = '✗ Error';
+                              wsEl.className = 'fail';
+                              log('WebSocket error (goose binary not running - expected in smoke test)');
+                          };
+
+                          ws.onclose = function() {
+                              log('WebSocket closed');
+                          };
+
+                          // Timeout
+                          setTimeout(function() {
+                              if (ws.readyState === WebSocket.CONNECTING) {
+                                  ws.close();
+                                  wsEl.textContent = '✗ Timeout';
+                                  wsEl.className = 'fail';
+                                  log('Connection timed out (goose binary not included in smoke test)');
+                              }
+                          }, 5000);
+
+                      } catch (e) {
+                          wsEl.textContent = '✗ Failed';
+                          wsEl.className = 'fail';
+                          log('Error: ' + e.message);
+                      }
+                  }
+              </script>
+          </body>
+          </html>
+          HTMLEOF
+
+      - name: Create placeholder native lib
+        run: |
+          # Create a minimal placeholder so the APK builds
+          # The real binary comes from the full build workflow
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          echo "PLACEHOLDER" > app/src/main/jniLibs/arm64-v8a/libgoose.so
+
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload smoke test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: goose-android-smoke-test
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14

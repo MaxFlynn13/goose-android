@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple goose silhouette placeholder -->
+    <path
+        android:fillColor="#FF6B35"
+        android:pathData="M54,20 C40,20 30,30 30,44 C30,52 34,58 40,62 L38,78 C38,82 42,86 54,86 C66,86 70,82 70,78 L68,62 C74,58 78,52 78,44 C78,30 68,20 54,20 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,38 A3,3 0 1,1 46,44 A3,3 0 1,1 46,38 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,38 A3,3 0 1,1 62,44 A3,3 0 1,1 62,38 Z" />
+    <path
+        android:fillColor="#FFB347"
+        android:pathData="M50,48 L54,54 L58,48 Z" />
+</vector>
