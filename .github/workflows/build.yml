@@ -26,39 +26,50 @@ jobs:
         run: |
           git clone --depth 1 --branch ${{ env.GOOSE_REF }} ${{ env.GOOSE_REPO }} goose-src
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk || true
-
       - name: Setup Android NDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup NDK
+      - name: Ensure NDK is available
         run: |
-          # Use whatever NDK is already installed on the runner
-          # cargo-ndk will find it via ANDROID_NDK_ROOT or ANDROID_NDK_HOME
-          if [ -n "$ANDROID_NDK_ROOT" ]; then
-            echo "Using existing NDK at: $ANDROID_NDK_ROOT"
-            echo "ANDROID_NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+          # Use the NDK already on the runner
+          if [ -n "$ANDROID_NDK_ROOT" ] && [ -d "$ANDROID_NDK_ROOT" ]; then
+            echo "Using NDK at: $ANDROID_NDK_ROOT"
           elif [ -d "$ANDROID_HOME/ndk" ]; then
-            NDK_DIR=$(ls -d $ANDROID_HOME/ndk/*/ 2>/dev/null | sort -V | tail -1)
-            echo "Found NDK at: $NDK_DIR"
-            echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
-            echo "ANDROID_NDK_ROOT=$NDK_DIR" >> $GITHUB_ENV
+            ANDROID_NDK_ROOT=$(ls -d $ANDROID_HOME/ndk/*/ 2>/dev/null | sort -V | tail -1 | sed 's:/$::')
+            echo "Found NDK at: $ANDROID_NDK_ROOT"
           else
-            echo "No NDK found, installing latest..."
+            echo "Installing NDK..."
             sdkmanager --install "ndk;27.2.12479018"
-            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> $GITHUB_ENV
+            ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/27.2.12479018"
           fi
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
+
+          # Verify the toolchain exists
+          ls "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/" | head -5
+
+      - name: Install Rust toolchain matching goose project
+        run: |
+          cd goose-src
+
+          # Read the toolchain version from the project's rust-toolchain.toml
+          if [ -f "rust-toolchain.toml" ]; then
+            echo "=== Project rust-toolchain.toml ==="
+            cat rust-toolchain.toml
+            echo ""
+          fi
+
+          # Install whatever toolchain the project needs + add Android target
+          rustup show
+          rustup target add aarch64-linux-android
+
+          # Verify the target is installed
+          rustup target list --installed | grep android
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler cmake
+          sudo apt-get install -y protobuf-compiler cmake pkg-config
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -67,60 +78,117 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             goose-src/target
-          key: ${{ runner.os }}-cargo-ndk-arm64-${{ hashFiles('goose-src/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-android-arm64-v3-${{ hashFiles('goose-src/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-ndk-arm64-
+            ${{ runner.os }}-cargo-android-arm64-v3-
 
-      - name: Analyze and patch goose source
-        run: |
-          chmod +x scripts/patch-goose-build.sh
-          ./scripts/patch-goose-build.sh goose-src
-
-      - name: Ensure Android target is installed for project toolchain
+      - name: Patch goose source for Android
         run: |
           cd goose-src
-          # The goose project has a rust-toolchain.toml that pins a specific version.
-          # We need to add the Android target to THAT toolchain, not just the default.
-          rustup target add aarch64-linux-android
-          rustup show
+
+          # 1. The keyring crate on Linux needs dbus/secret-service.
+          #    On Android (target_os = "android"), this section doesn't apply
+          #    because cfg(target_os = "linux") != cfg(target_os = "android").
+          #    But let's verify and patch if needed.
+          echo "=== Checking target-specific deps ==="
+          grep -n 'target.*linux' crates/goose/Cargo.toml || true
+          grep -n 'target.*android' crates/goose/Cargo.toml || true
+
+          # 2. arboard (clipboard) - check if it compiles for Android
+          #    arboard uses android-clipboard on Android, should be fine
+          echo "=== arboard config ==="
+          grep -A2 "arboard" crates/goose/Cargo.toml || true
+
+          # 3. Disable the rust-toolchain.toml components that might interfere
+          #    (like rustfmt, clippy) - we only need the compiler
+          if [ -f "rust-toolchain.toml" ]; then
+            # Keep channel but strip components that aren't needed for build
+            echo "=== Original rust-toolchain.toml ==="
+            cat rust-toolchain.toml
+          fi
+
+      - name: Configure cargo for Android cross-compilation
+        run: |
+          cd goose-src
+
+          NDK_TOOLCHAIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          API=${{ env.ANDROID_API_LEVEL }}
+
+          # Create .cargo/config.toml for the Android target
+          mkdir -p .cargo
+          cat > .cargo/config.toml << EOF
+          [target.aarch64-linux-android]
+          linker = "${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
+          ar = "${NDK_TOOLCHAIN}/bin/llvm-ar"
+
+          [env]
+          CC_aarch64_linux_android = "${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
+          CXX_aarch64_linux_android = "${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang++"
+          AR_aarch64_linux_android = "${NDK_TOOLCHAIN}/bin/llvm-ar"
+          RANLIB_aarch64_linux_android = "${NDK_TOOLCHAIN}/bin/llvm-ranlib"
+          EOF
+
+          echo "=== .cargo/config.toml ==="
+          cat .cargo/config.toml
+
+          # Verify linker exists
+          ls -la "${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
 
       - name: Build goose binary for Android arm64
+        env:
+          # Ensure pkg-config doesn't try to find host libraries
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_SYSROOT_DIR: ""
+          # Disable keyring at build time (uses file-based secrets on Android)
+          GOOSE_DISABLE_KEYRING: "true"
+          # Ring crate needs these for cross-compilation
+          TARGET_CC: "${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang"
+          TARGET_AR: "${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         run: |
           cd goose-src
 
-          # Setup the NDK toolchain for Rust cross-compilation
-          # This avoids cargo-ndk which has panic bugs with certain toolchain configs
-          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-          export CC_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
-          export CXX_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++"
+          NDK_TOOLCHAIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+          API=${{ env.ANDROID_API_LEVEL }}
+
+          # Export env vars that various -sys crates need
+          export CC_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
+          export CXX_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang++"
           export AR_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/llvm-ar"
           export RANLIB_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/llvm-ranlib"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
 
-          echo "CC: $CC_aarch64_linux_android"
-          ls -la "$CC_aarch64_linux_android" || echo "CC not found!"
-
-          # Build directly with cargo (no cargo-ndk wrapper needed)
-          cargo build --release -p goose-cli \
+          # Build with minimal features for Android
+          # - rustls-tls: pure Rust TLS (no OpenSSL needed)
+          # - telemetry: basic telemetry
+          # - disable-update: no auto-updater on Android
+          # EXCLUDED: code-mode (V8), local-inference (llama.cpp), aws-providers
+          cargo build --release \
             --target aarch64-linux-android \
+            -p goose-cli \
             --no-default-features \
-            --features "rustls-tls,telemetry,disable-update"
+            --features "rustls-tls,telemetry,disable-update" \
+            2>&1 | tee build.log | tail -50
 
-      - name: Strip and package binary
-        run: |
-          # Find the built binary
-          BINARY="goose-src/target/aarch64-linux-android/release/goose"
-          if [ ! -f "$BINARY" ]; then
-            echo "Binary not found at expected path, searching..."
-            find goose-src/target -name "goose" -type f | head -10
+          # Check if build succeeded
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "=== BUILD FAILED ==="
+            echo "Last 100 lines of build log:"
+            tail -100 build.log
             exit 1
           fi
 
-          # Strip with NDK's llvm-strip
-          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-          STRIP="${NDK_TOOLCHAIN}/bin/llvm-strip"
+      - name: Strip and package binary
+        run: |
+          BINARY="goose-src/target/aarch64-linux-android/release/goose"
+          if [ ! -f "$BINARY" ]; then
+            echo "Binary not found, searching..."
+            find goose-src/target/aarch64-linux-android -name "goose" -type f 2>/dev/null | head -10
+            exit 1
+          fi
+
+          NDK_TOOLCHAIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
           cp "$BINARY" libgoose.so
-          "$STRIP" libgoose.so || echo "Strip failed (non-fatal)"
+          "${NDK_TOOLCHAIN}/bin/llvm-strip" libgoose.so || echo "Strip failed (non-fatal)"
 
           echo "=== Binary info ==="
           ls -lh libgoose.so

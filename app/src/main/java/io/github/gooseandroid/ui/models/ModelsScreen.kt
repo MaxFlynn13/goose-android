@@ -258,14 +258,27 @@ private fun ModelCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Action button
-            if (!compatibility.canRun) {
+            // RAM warning (advisory only — never blocks download)
+            if (!compatibility.meetsRecommended) {
                 Text(
-                    "⚠️ Insufficient RAM (need ${compatibility.requiredRamMb}MB, have ${compatibility.availableRamMb}MB)",
+                    "⚠️ Below recommended RAM (${compatibility.totalRamMb}MB device / ${compatibility.requiredRamMb}MB recommended) — may run slowly",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
+                    color = MaterialTheme.colorScheme.tertiary
                 )
-            } else if (modelStatus.downloaded) {
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            if (!compatibility.hasEnoughStorage) {
+                Text(
+                    "⚠️ Low storage — ${formatSize(model.sizeBytes)} needed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            // Action buttons — always available
+            if (modelStatus.downloaded) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = { onDelete(model) },

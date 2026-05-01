@@ -155,18 +155,28 @@ class LocalModelManager(private val context: Context) {
     }
 
     /**
-     * Check if device meets minimum requirements for a model.
+     * Check device specs against model requirements.
+     * Returns compatibility info as a WARNING only — never blocks download.
+     * Users can always proceed at their own risk.
      */
     fun canRunModel(model: ModelInfo): ModelCompatibility {
-        val runtime = Runtime.getRuntime()
-        val availableRamMb = runtime.maxMemory() / (1024 * 1024)
-        val hasEnoughRam = availableRamMb >= model.minRamMb
+        val activityManager = context.getSystemService(android.app.ActivityManager::class.java)
+        val memInfo = android.app.ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memInfo)
+
+        // Use actual device RAM, not JVM heap limit
+        val totalRamMb = memInfo.totalMem / (1024 * 1024)
+        val availableRamMb = memInfo.availMem / (1024 * 1024)
         val hasEnoughStorage = getAvailableStorageMb() > (model.sizeBytes / (1024 * 1024))
 
+        // This is advisory only — never blocks the user
+        val meetsRecommended = totalRamMb >= model.minRamMb
+
         return ModelCompatibility(
-            canRun = hasEnoughRam && hasEnoughStorage,
-            hasEnoughRam = hasEnoughRam,
+            canRun = true, // Always allow — user decides
+            meetsRecommended = meetsRecommended,
             hasEnoughStorage = hasEnoughStorage,
+            totalRamMb = totalRamMb,
             availableRamMb = availableRamMb,
             requiredRamMb = model.minRamMb.toLong()
         )
@@ -199,9 +209,10 @@ data class ModelStatus(
 )
 
 data class ModelCompatibility(
-    val canRun: Boolean,
-    val hasEnoughRam: Boolean,
-    val hasEnoughStorage: Boolean,
-    val availableRamMb: Long,
-    val requiredRamMb: Long
+    val canRun: Boolean,           // Always true — never block the user
+    val meetsRecommended: Boolean, // Advisory: does device meet recommended specs?
+    val hasEnoughStorage: Boolean, // Advisory: enough free disk space?
+    val totalRamMb: Long,          // Total device RAM
+    val availableRamMb: Long,      // Currently available RAM
+    val requiredRamMb: Long        // Model's recommended minimum
 )
