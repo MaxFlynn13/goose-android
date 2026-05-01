@@ -20,7 +20,8 @@ import io.github.gooseandroid.ModelStatus
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onNavigateToModels: () -> Unit
+    onNavigateToModels: () -> Unit,
+    onNavigateToAppearance: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -86,6 +87,20 @@ fun SettingsScreen(
                 ApiKeyField(
                     label = "Google AI API Key",
                     keyName = "GOOGLE_API_KEY"
+                )
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                SettingsSection("Appearance")
+            }
+
+            item {
+                ProviderCard(
+                    title = "UI Customization",
+                    description = "Colors, text size, panel position",
+                    icon = Icons.Default.Palette,
+                    onClick = onNavigateToAppearance
                 )
             }
 

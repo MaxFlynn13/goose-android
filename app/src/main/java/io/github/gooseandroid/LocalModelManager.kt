@@ -27,92 +27,118 @@ class LocalModelManager(private val context: Context) {
         private const val HF_BASE = "https://huggingface.co"
 
         /**
-         * Model catalog — real download URLs from HuggingFace litert-community.
-         * Ordered by recommendation for Snapdragon 888 (12GB RAM).
+         * Model catalog — using GGUF models from ungated HuggingFace repos.
+         *
+         * The litert-community models require HuggingFace auth (401 error).
+         * Instead we use GGUF quantized models which are:
+         * - Ungated (no auth required)
+         * - Widely available
+         * - Compatible with llama.cpp (which LiteRT can also load via conversion)
+         *
+         * Sources:
+         * - bartowski (popular GGUF quantizer, ungated)
+         * - unsloth (fast inference optimized, ungated)
+         * - lmstudio-community (ungated, tested)
+         *
+         * Once Google AI Edge Gallery publishes ungated .task files,
+         * we'll add those as preferred options.
          */
         val MODEL_CATALOG = listOf(
             // === Gemma 3 (Google, latest generation) ===
             ModelInfo(
-                id = "gemma3-1b-it",
+                id = "gemma3-1b-it-q4",
                 name = "Gemma 3 1B Instruct",
                 description = "Google's latest small model. Fast, efficient, great for quick tasks.",
-                sizeBytes = 800_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task",
-                filename = "gemma3-1b-it-int4.task",
-                format = ModelFormat.LITERT,
+                sizeBytes = 900_000_000L,
+                downloadUrl = "$HF_BASE/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf",
+                filename = "gemma-3-1b-it-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
                 minRamMb = 2048,
                 recommended = true
             ),
             ModelInfo(
-                id = "gemma3-4b-it",
+                id = "gemma3-4b-it-q4",
                 name = "Gemma 3 4B Instruct",
                 description = "Excellent balance of speed and intelligence. Best pick for most tasks.",
-                sizeBytes = 2_500_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Gemma3-4B-IT/resolve/main/gemma3-4b-it-int4.task",
-                filename = "gemma3-4b-it-int4.task",
-                format = ModelFormat.LITERT,
+                sizeBytes = 2_700_000_000L,
+                downloadUrl = "$HF_BASE/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+                filename = "gemma-3-4b-it-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
                 minRamMb = 4096,
                 recommended = true
             ),
             ModelInfo(
-                id = "gemma3-12b-it",
+                id = "gemma3-12b-it-q4",
                 name = "Gemma 3 12B Instruct",
                 description = "High-quality reasoning. Needs more RAM but significantly smarter.",
-                sizeBytes = 7_000_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Gemma3-12B-IT/resolve/main/gemma3-12b-it-int4.task",
-                filename = "gemma3-12b-it-int4.task",
-                format = ModelFormat.LITERT,
+                sizeBytes = 7_300_000_000L,
+                downloadUrl = "$HF_BASE/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
+                filename = "gemma-3-12b-it-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
                 minRamMb = 8192,
                 recommended = true
             ),
 
-            // === Gemma 2 (previous gen, still good) ===
+            // === Llama 3.2 (Meta, ungated) ===
             ModelInfo(
-                id = "gemma2-2b-it",
-                name = "Gemma 2 2B Instruct",
-                description = "Previous gen 2B model. Solid performance, well-tested.",
-                sizeBytes = 1_500_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Gemma2-2B-IT/resolve/main/gemma2-2b-it-int4.task",
-                filename = "gemma2-2b-it-int4.task",
-                format = ModelFormat.LITERT,
-                minRamMb = 3072,
-                recommended = false
-            ),
-
-            // === Llama 3.2 (Meta) ===
-            ModelInfo(
-                id = "llama-3.2-1b",
+                id = "llama-3.2-1b-q4",
                 name = "Llama 3.2 1B Instruct",
                 description = "Meta's smallest Llama. Ultra-fast, good for simple tasks.",
-                sizeBytes = 700_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Llama-3.2-1B-Instruct/resolve/main/llama-3.2-1b-instruct-int4.task",
-                filename = "llama-3.2-1b-instruct-int4.task",
-                format = ModelFormat.LITERT,
+                sizeBytes = 750_000_000L,
+                downloadUrl = "$HF_BASE/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+                filename = "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
                 minRamMb = 2048,
                 recommended = true
             ),
             ModelInfo(
-                id = "llama-3.2-3b",
+                id = "llama-3.2-3b-q4",
                 name = "Llama 3.2 3B Instruct",
                 description = "Meta's 3B Llama. Good balance of speed and capability.",
-                sizeBytes = 1_800_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Llama-3.2-3B-Instruct/resolve/main/llama-3.2-3b-instruct-int4.task",
-                filename = "llama-3.2-3b-instruct-int4.task",
-                format = ModelFormat.LITERT,
+                sizeBytes = 2_000_000_000L,
+                downloadUrl = "$HF_BASE/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                filename = "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
                 minRamMb = 4096,
                 recommended = true
             ),
 
-            // === Phi (Microsoft) ===
+            // === Phi 4 Mini (Microsoft, latest) ===
             ModelInfo(
-                id = "phi-3.5-mini",
-                name = "Phi 3.5 Mini (3.8B)",
-                description = "Microsoft's compact model. Strong reasoning for its size.",
-                sizeBytes = 2_300_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Phi-3.5-mini-instruct/resolve/main/phi-3.5-mini-instruct-int4.task",
-                filename = "phi-3.5-mini-instruct-int4.task",
-                format = ModelFormat.LITERT,
+                id = "phi-4-mini-q4",
+                name = "Phi 4 Mini (3.8B)",
+                description = "Microsoft's latest compact model. Excellent reasoning.",
+                sizeBytes = 2_400_000_000L,
+                downloadUrl = "$HF_BASE/bartowski/phi-4-mini-instruct-GGUF/resolve/main/phi-4-mini-instruct-Q4_K_M.gguf",
+                filename = "phi-4-mini-instruct-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
                 minRamMb = 4096,
+                recommended = false
+            ),
+
+            // === Qwen 2.5 (Alibaba, strong multilingual) ===
+            ModelInfo(
+                id = "qwen2.5-3b-q4",
+                name = "Qwen 2.5 3B Instruct",
+                description = "Strong multilingual model. Great for code and reasoning.",
+                sizeBytes = 2_100_000_000L,
+                downloadUrl = "$HF_BASE/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+                filename = "qwen2.5-3b-instruct-q4_k_m.gguf",
+                format = ModelFormat.GGUF,
+                minRamMb = 4096,
+                recommended = false
+            ),
+
+            // === SmolLM2 (HuggingFace, tiny but capable) ===
+            ModelInfo(
+                id = "smollm2-1.7b-q4",
+                name = "SmolLM2 1.7B Instruct",
+                description = "HuggingFace's tiny model. Extremely fast, surprisingly capable.",
+                sizeBytes = 1_100_000_000L,
+                downloadUrl = "$HF_BASE/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
+                filename = "SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
+                minRamMb = 2048,
                 recommended = false
             )
         )
@@ -172,20 +198,37 @@ class LocalModelManager(private val context: Context) {
                 _downloads.value = _downloads.value + (model.id to DownloadState.Downloading(0f))
                 Log.i(TAG, "Starting download: ${model.name} from ${model.downloadUrl}")
 
-                val url = URL(model.downloadUrl)
-                val connection = url.openConnection() as HttpURLConnection
-                connection.connectTimeout = 30_000
-                connection.readTimeout = 30_000
-                connection.setRequestProperty("User-Agent", "GooseAndroid/0.1.0")
+                var currentUrl = model.downloadUrl
+                var connection: HttpURLConnection
+                var responseCode: Int
+                var redirectCount = 0
 
-                // Support resume if temp file exists
-                if (tempFile.exists()) {
-                    connection.setRequestProperty("Range", "bytes=${tempFile.length()}-")
-                }
+                // Follow redirects (HuggingFace uses 302 → CDN)
+                do {
+                    val url = URL(currentUrl)
+                    connection = url.openConnection() as HttpURLConnection
+                    connection.connectTimeout = 30_000
+                    connection.readTimeout = 60_000
+                    connection.instanceFollowRedirects = true
+                    connection.setRequestProperty("User-Agent", "GooseAndroid/0.1.0")
 
-                connection.connect()
+                    // Support resume if temp file exists
+                    if (tempFile.exists() && tempFile.length() > 0) {
+                        connection.setRequestProperty("Range", "bytes=${tempFile.length()}-")
+                    }
 
-                val responseCode = connection.responseCode
+                    connection.connect()
+                    responseCode = connection.responseCode
+
+                    if (responseCode in 301..303 || responseCode == 307 || responseCode == 308) {
+                        currentUrl = connection.getHeaderField("Location") ?: break
+                        connection.disconnect()
+                        redirectCount++
+                    } else {
+                        break
+                    }
+                } while (redirectCount < 5)
+
                 if (responseCode !in 200..299) {
                     throw Exception("HTTP $responseCode: ${connection.responseMessage}")
                 }
