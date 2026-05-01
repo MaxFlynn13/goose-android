@@ -155,36 +155,36 @@ jobs:
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
 
           # Fix sys-info crate: its C code uses index() which needs <strings.h> on Android.
-          # We can't use global CFLAGS because it breaks assembly (.S) files in zstd-sys.
-          # Instead, patch the sys-info source directly after cargo fetches it.
-          # The actual patch happens in the pre-build step below.
+          # We use a wrapper script for CC that adds the include only for .c files.
 
-          # Patch sys-info crate: add #include <strings.h> to its linux.c
-          # This fixes the 'index' implicit function declaration on Android
-          SYS_INFO_DIR=$(find ~/.cargo/registry/src -path "*/sys-info-*/c/linux.c" 2>/dev/null | head -1)
-          if [ -n "$SYS_INFO_DIR" ]; then
-            echo "Patching sys-info at: $SYS_INFO_DIR"
-            sed -i '1i #include <strings.h>' "$SYS_INFO_DIR"
+          # Create a CC wrapper that adds -include strings.h only for .c files
+          # This fixes sys-info without breaking zstd-sys assembly files
+          NDK_CC="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
+          WRAPPER="/tmp/android-cc-wrapper.sh"
+          cat > "$WRAPPER" << 'CCEOF'
+          #!/bin/bash
+          # Wrapper: adds -include strings.h only when compiling C (not assembly)
+          REAL_CC="PLACEHOLDER_CC"
+          ARGS=("$@")
+          IS_ASM=false
+          for arg in "${ARGS[@]}"; do
+            case "$arg" in
+              *.S|*.s|*.asm) IS_ASM=true ;;
+            esac
+          done
+          if [ "$IS_ASM" = "false" ]; then
+            exec "$REAL_CC" -include strings.h "${ARGS[@]}"
           else
-            echo "sys-info not yet fetched, will patch via CFLAGS for C files only"
-            # Only apply to .c files by using the CC wrapper approach
+            exec "$REAL_CC" "${ARGS[@]}"
           fi
+          CCEOF
+          sed -i "s|PLACEHOLDER_CC|${NDK_CC}|" "$WRAPPER"
+          chmod +x "$WRAPPER"
 
-          # Alternative: override just for C compilation (not .S assembly)
-          # The cc crate respects CFLAGS but applies them to all files including .S
-          # So we need to be more targeted. Let's fetch deps first, then patch.
-          cargo fetch --target aarch64-linux-android || true
-
-          # Now patch sys-info after fetch
-          SYS_INFO_DIR=$(find ~/.cargo/registry/src -path "*/sys-info-*/c/linux.c" 2>/dev/null | head -1)
-          if [ -n "$SYS_INFO_DIR" ]; then
-            echo "Patching sys-info at: $SYS_INFO_DIR"
-            if ! grep -q "strings.h" "$SYS_INFO_DIR"; then
-              sed -i '1i #include <strings.h>' "$SYS_INFO_DIR"
-            fi
-            echo "First 5 lines after patch:"
-            head -5 "$SYS_INFO_DIR"
-          fi
+          # Override CC to use our wrapper
+          export CC_aarch64_linux_android="$WRAPPER"
+          echo "Using CC wrapper: $WRAPPER"
+          cat "$WRAPPER"
 
           # Build with minimal features for Android
           # - rustls-tls: pure Rust TLS (no OpenSSL needed)
