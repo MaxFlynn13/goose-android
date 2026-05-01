@@ -141,9 +141,6 @@ jobs:
           PKG_CONFIG_SYSROOT_DIR: ""
           # Disable keyring at build time (uses file-based secrets on Android)
           GOOSE_DISABLE_KEYRING: "true"
-          # Ring crate needs these for cross-compilation
-          TARGET_CC: "${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android34-clang"
-          TARGET_AR: "${{ env.ANDROID_NDK_ROOT }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
         run: |
           cd goose-src
 
@@ -156,6 +153,11 @@ jobs:
           export AR_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/llvm-ar"
           export RANLIB_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/llvm-ranlib"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
+
+          # Fix sys-info crate: Android bionic doesn't expose index() without <strings.h>
+          # Adding -include strings.h fixes the implicit function declaration
+          export CFLAGS_aarch64_linux_android="-include strings.h"
+          export CXXFLAGS_aarch64_linux_android="-include strings.h"
 
           # Build with minimal features for Android
           # - rustls-tls: pure Rust TLS (no OpenSSL needed)
