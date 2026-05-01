@@ -32,7 +32,7 @@ jobs:
           targets: aarch64-linux-android
 
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+        run: cargo install cargo-ndk || true
 
       - name: Setup Android NDK
         uses: android-actions/setup-android@v3
@@ -80,17 +80,21 @@ jobs:
         run: |
           cd goose-src
 
-          # Ensure NDK env vars are consistent (cargo-ndk panics otherwise)
-          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          # Setup the NDK toolchain for Rust cross-compilation
+          # This avoids cargo-ndk which has panic bugs with certain toolchain configs
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          export CC_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
+          export CXX_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang++"
+          export AR_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/llvm-ar"
+          export RANLIB_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/llvm-ranlib"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${{ env.ANDROID_API_LEVEL }}-clang"
 
-          echo "NDK_HOME: $ANDROID_NDK_HOME"
-          echo "NDK_ROOT: $ANDROID_NDK_ROOT"
+          echo "CC: $CC_aarch64_linux_android"
+          ls -la "$CC_aarch64_linux_android" || echo "CC not found!"
 
-          # cargo-ndk handles all the NDK toolchain setup
-          cargo ndk \
-            -t arm64-v8a \
-            -p ${{ env.ANDROID_API_LEVEL }} \
-            build --release -p goose-cli \
+          # Build directly with cargo (no cargo-ndk wrapper needed)
+          cargo build --release -p goose-cli \
+            --target aarch64-linux-android \
             --no-default-features \
             --features "rustls-tls,telemetry,disable-update"
 
@@ -100,12 +104,13 @@ jobs:
           BINARY="goose-src/target/aarch64-linux-android/release/goose"
           if [ ! -f "$BINARY" ]; then
             echo "Binary not found at expected path, searching..."
-            find goose-src/target -name "goose" -type f -executable | head -5
+            find goose-src/target -name "goose" -type f | head -10
             exit 1
           fi
 
           # Strip with NDK's llvm-strip
-          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          STRIP="${NDK_TOOLCHAIN}/bin/llvm-strip"
           cp "$BINARY" libgoose.so
           "$STRIP" libgoose.so || echo "Strip failed (non-fatal)"
 
