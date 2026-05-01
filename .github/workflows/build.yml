@@ -154,37 +154,35 @@ jobs:
           export RANLIB_aarch64_linux_android="${NDK_TOOLCHAIN}/bin/llvm-ranlib"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
 
-          # Fix sys-info crate: its C code uses index() which needs <strings.h> on Android.
-          # We use a wrapper script for CC that adds the include only for .c files.
+          # Fix sys-info crate: its C code uses index() which is missing on Android bionic.
+          # We patch the source directly in the cargo registry after fetching.
 
-          # Create a CC wrapper that adds -include strings.h only for .c files
-          # This fixes sys-info without breaking zstd-sys assembly files
-          NDK_CC="${NDK_TOOLCHAIN}/bin/aarch64-linux-android${API}-clang"
-          WRAPPER="/tmp/android-cc-wrapper.sh"
-          cat > "$WRAPPER" << 'CCEOF'
-          #!/bin/bash
-          # Wrapper: adds -include strings.h only when compiling C (not assembly)
-          REAL_CC="PLACEHOLDER_CC"
-          ARGS=("$@")
-          IS_ASM=false
-          for arg in "${ARGS[@]}"; do
-            case "$arg" in
-              *.S|*.s|*.asm) IS_ASM=true ;;
-            esac
-          done
-          if [ "$IS_ASM" = "false" ]; then
-            exec "$REAL_CC" -include strings.h "${ARGS[@]}"
+          # Fetch all dependencies first so we can patch sys-info
+          cargo fetch --target aarch64-linux-android
+
+          # Patch sys-info: replace index() with strchr() which is available on Android
+          # index() is a deprecated POSIX function, strchr() is the standard replacement
+          SYS_INFO_SRC=$(find ~/.cargo/registry/src -path "*/sys-info-*/c/linux.c" 2>/dev/null | head -1)
+          if [ -n "$SYS_INFO_SRC" ]; then
+            echo "Patching sys-info at: $SYS_INFO_SRC"
+            # Replace index() calls with strchr() - they have identical semantics
+            sed -i 's/index(/strchr(/g' "$SYS_INFO_SRC"
+            echo "Patched. Verifying no more index() calls:"
+            grep -n "index\b" "$SYS_INFO_SRC" || echo "  Clean ✓"
           else
-            exec "$REAL_CC" "${ARGS[@]}"
+            echo "WARNING: sys-info source not found in cargo registry"
           fi
-          CCEOF
-          sed -i "s|PLACEHOLDER_CC|${NDK_CC}|" "$WRAPPER"
-          chmod +x "$WRAPPER"
 
-          # Override CC to use our wrapper
-          export CC_aarch64_linux_android="$WRAPPER"
-          echo "Using CC wrapper: $WRAPPER"
-          cat "$WRAPPER"
+          # Also need to remove the .cargo-checksum.json or cargo will reject the patch
+          SYS_INFO_DIR=$(dirname "$SYS_INFO_SRC" 2>/dev/null)
+          if [ -n "$SYS_INFO_DIR" ]; then
+            CHECKSUM_FILE="$(dirname "$SYS_INFO_DIR")/.cargo-checksum.json"
+            if [ -f "$CHECKSUM_FILE" ]; then
+              # Replace the checksum with an empty one so cargo doesn't reject our patch
+              echo '{"files":{}}' > "$CHECKSUM_FILE"
+              echo "Cleared cargo checksum for sys-info"
+            fi
+          fi
 
           # Build with minimal features for Android
           # - rustls-tls: pure Rust TLS (no OpenSSL needed)
