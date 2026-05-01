@@ -1,5 +1,6 @@
 package io.github.gooseandroid.ui.models
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -13,24 +14,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import io.github.gooseandroid.LocalModelManager
-import io.github.gooseandroid.ModelFormat
-import io.github.gooseandroid.ModelInfo
-import io.github.gooseandroid.ModelStatus
+import io.github.gooseandroid.*
 
 /**
- * Model management screen.
+ * Model management screen — download, manage, and select local LLMs.
  *
- * Allows users to:
- * - Browse available models optimized for their device
- * - Download models for offline use
- * - Delete downloaded models to free space
- * - See hardware compatibility info
- *
- * Models run via Google AI Edge LiteRT with hardware acceleration:
- * - Snapdragon 888: Hexagon 780 DSP (fastest) or Adreno 660 GPU
- * - Other Qualcomm: QNN delegate
- * - Other devices: GPU delegate or CPU fallback
+ * Models sourced from HuggingFace litert-community (same as Google AI Edge Gallery).
+ * Downloads happen directly in-app with progress tracking and resume support.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,8 +29,11 @@ fun ModelsScreen(
 ) {
     val context = LocalContext.current
     val modelManager = remember { LocalModelManager(context) }
-    val models = remember { modelManager.getAvailableModels() }
-    val usedStorage = remember { modelManager.getUsedStorageMb() }
+    val downloads by modelManager.downloads.collectAsState()
+
+    // Refresh model list when downloads complete
+    val models = remember(downloads) { modelManager.getAvailableModels() }
+    val usedStorage = remember(downloads) { modelManager.getUsedStorageMb() }
     val availableStorage = remember { modelManager.getAvailableStorageMb() }
 
     Scaffold(
@@ -86,30 +79,37 @@ fun ModelsScreen(
             items(models.filter { it.model.recommended }) { modelStatus ->
                 ModelCard(
                     modelStatus = modelStatus,
+                    downloadState = downloads[modelStatus.model.id],
                     modelManager = modelManager,
-                    onDownload = { /* TODO: Download with progress */ },
+                    onDownload = { modelManager.downloadModel(it) },
+                    onCancel = { modelManager.cancelDownload(it) },
                     onDelete = { modelManager.deleteModel(it.id) }
                 )
             }
 
-            // Section: All models
-            item {
-                Text(
-                    "All available models",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 16.dp)
-                )
-            }
+            // Section: More models
+            val otherModels = models.filter { !it.model.recommended }
+            if (otherModels.isNotEmpty()) {
+                item {
+                    Text(
+                        "More models",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+                }
 
-            items(models.filter { !it.model.recommended }) { modelStatus ->
-                ModelCard(
-                    modelStatus = modelStatus,
-                    modelManager = modelManager,
-                    onDownload = { /* TODO */ },
-                    onDelete = { modelManager.deleteModel(it.id) }
-                )
+                items(otherModels) { modelStatus ->
+                    ModelCard(
+                        modelStatus = modelStatus,
+                        downloadState = downloads[modelStatus.model.id],
+                        modelManager = modelManager,
+                        onDownload = { modelManager.downloadModel(it) },
+                        onCancel = { modelManager.cancelDownload(it) },
+                        onDelete = { modelManager.deleteModel(it.id) }
+                    )
+                }
             }
 
             // Info footer
@@ -188,15 +188,19 @@ private fun HardwareInfoCard() {
 @Composable
 private fun ModelCard(
     modelStatus: ModelStatus,
+    downloadState: DownloadState?,
     modelManager: LocalModelManager,
     onDownload: (ModelInfo) -> Unit,
+    onCancel: (ModelInfo) -> Unit,
     onDelete: (ModelInfo) -> Unit
 ) {
     val model = modelStatus.model
     val compatibility = remember { modelManager.canRunModel(model) }
+    val isDownloaded = modelStatus.downloaded || downloadState is DownloadState.Complete
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -216,11 +220,10 @@ private fun ModelCard(
                     )
                 }
 
-                // Status badge
-                if (modelStatus.downloaded) {
+                if (isDownloaded) {
                     AssistChip(
                         onClick = {},
-                        label = { Text("Downloaded") },
+                        label = { Text("Ready") },
                         leadingIcon = {
                             Icon(
                                 Icons.Default.CheckCircle,
@@ -234,74 +237,112 @@ private fun ModelCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Model details row
+            // Model specs
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                DetailChip(
-                    icon = Icons.Default.Storage,
-                    text = formatSize(model.sizeBytes)
-                )
-                DetailChip(
-                    icon = Icons.Default.Memory,
-                    text = "${model.minRamMb}MB RAM"
-                )
-                DetailChip(
-                    icon = Icons.Default.Speed,
-                    text = when (model.format) {
-                        ModelFormat.LITERT -> "LiteRT"
-                        ModelFormat.GGUF -> "GGUF"
-                    }
-                )
+                DetailChip(Icons.Default.Storage, formatSize(model.sizeBytes))
+                DetailChip(Icons.Default.Memory, "${model.minRamMb}MB RAM")
+                DetailChip(Icons.Default.Speed, "LiteRT")
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // RAM warning (advisory only — never blocks download)
+            // Warnings (advisory only)
             if (!compatibility.meetsRecommended) {
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "⚠️ Below recommended RAM (${compatibility.totalRamMb}MB device / ${compatibility.requiredRamMb}MB recommended) — may run slowly",
+                    "⚠️ Below recommended RAM (${compatibility.totalRamMb}MB / ${compatibility.requiredRamMb}MB rec.) — may be slow",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary
                 )
-                Spacer(modifier = Modifier.height(8.dp))
             }
-
-            if (!compatibility.hasEnoughStorage) {
+            if (!compatibility.hasEnoughStorage && !isDownloaded) {
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     "⚠️ Low storage — ${formatSize(model.sizeBytes)} needed",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary
                 )
-                Spacer(modifier = Modifier.height(8.dp))
             }
 
-            // Action buttons — always available
-            if (modelStatus.downloaded) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { onDelete(model) },
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Action area
+            when {
+                // Currently downloading
+                downloadState is DownloadState.Downloading -> {
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Downloading... ${(downloadState.progress * 100).toInt()}%",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            TextButton(onClick = { onCancel(model) }) {
+                                Text("Cancel", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { downloadState.progress },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.primary
                         )
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Delete")
-                    }
-                    Button(onClick = { /* TODO: Set as active model */ }) {
-                        Text("Use Model")
                     }
                 }
-            } else {
-                Button(
-                    onClick = { onDownload(model) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Download (${formatSize(model.sizeBytes)})")
+
+                // Download error
+                downloadState is DownloadState.Error -> {
+                    Column {
+                        Text(
+                            "❌ Download failed: ${downloadState.message}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { onDownload(model) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Retry Download")
+                        }
+                    }
+                }
+
+                // Already downloaded
+                isDownloaded -> {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { onDelete(model) },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Delete")
+                        }
+                        Button(onClick = { /* TODO: Set as active model */ }) {
+                            Text("Use Model")
+                        }
+                    }
+                }
+
+                // Not downloaded — show download button
+                else -> {
+                    Button(
+                        onClick = { onDownload(model) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Download (${formatSize(model.sizeBytes)})")
+                    }
                 }
             }
         }
@@ -349,11 +390,12 @@ private fun InfoFooter() {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Local models run entirely on your device using Google AI Edge LiteRT. " +
-                "No internet connection or API key required. " +
-                "Models use hardware acceleration (GPU/DSP) for fast inference.\n\n" +
+                "Models run entirely on your device using Google AI Edge LiteRT. " +
+                "No internet connection or API key required after download.\n\n" +
+                "Hardware acceleration (GPU/DSP) is used automatically for fast inference. " +
+                "Models are sourced from HuggingFace (litert-community).\n\n" +
                 "Smaller models (1-3B) are fast but less capable. " +
-                "Larger models (7B+) are more capable but slower and use more RAM.",
+                "Larger models (4B+) are smarter but use more RAM and are slower.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
