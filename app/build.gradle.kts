@@ -52,4 +52,11 @@ dependencies {
     implementation("androidx.webkit:webkit:1.11.0")
     implementation("androidx.lifecycle:lifecycle-service:2.8.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Google AI Edge LiteRT - on-device LLM inference
+    // Uses Snapdragon 888's Hexagon DSP + Adreno 660 GPU for acceleration
+    // TODO: Uncomment once LiteRT inference integration is implemented
+    // implementation("com.google.ai.edge.litert:litert:1.0.1")
+    // implementation("com.google.ai.edge.litert:litert-gpu:1.0.1")
+    // implementation("com.google.ai.edge.litert:litert-support:1.0.1")
 }

@@ -32,12 +32,12 @@ class GooseBridge(private val activity: MainActivity) {
     /**
      * Get the WebSocket URL for the running goose server.
      * Called by the frontend to establish ACP connection.
+     * The port is injected via window.GOOSE_WS_URL at page load,
+     * but this method serves as a fallback for dynamic queries.
      */
     @JavascriptInterface
     fun getGooseServeUrl(): String {
-        val port = (activity.getSystemService(Context.BIND_AUTO_CREATE) as? GooseService)?.getPort()
-        // The port is injected via window.GOOSE_WS_URL, but this is a fallback
-        return "ws://127.0.0.1:${port ?: 3284}/acp"
+        return "ws://127.0.0.1:${GoosePortHolder.port}/acp"
     }
 
     /**

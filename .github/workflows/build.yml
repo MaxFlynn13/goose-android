@@ -53,10 +53,13 @@ jobs:
       - name: Build goose binary for Android arm64
         run: |
           cd goose-src
+          # local-inference excluded: LiteRT handles on-device models natively
+          # code-mode excluded: V8 cross-compilation too complex for Android
+          # aws-providers excluded: not needed for mobile
           cross build --release -p goose-cli \
             --target aarch64-linux-android \
             --no-default-features \
-            --features "rustls-tls,telemetry,disable-update,local-inference"
+            --features "rustls-tls,telemetry,disable-update"
 
       - name: Strip and rename binary
         run: |

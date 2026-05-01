@@ -119,6 +119,7 @@ class GooseService : Service() {
             // Wait for server to be ready
             val ready = waitForServer(port)
             if (ready) {
+                GoosePortHolder.port = port
                 Log.i(TAG, "Goose is ready on port $port")
                 updateNotification("Goose is running on port $port")
             } else {
