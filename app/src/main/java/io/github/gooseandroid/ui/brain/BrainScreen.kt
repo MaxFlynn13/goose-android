@@ -1,5 +1,6 @@
 package io.github.gooseandroid.ui.brain
 
+import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -491,4 +492,4 @@ private fun ImportExportSheet(
     }
 }
 
-private val Log = android.util.Log
+
