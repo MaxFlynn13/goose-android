@@ -76,6 +76,14 @@ jobs:
           chmod +x scripts/patch-goose-build.sh
           ./scripts/patch-goose-build.sh goose-src
 
+      - name: Ensure Android target is installed for project toolchain
+        run: |
+          cd goose-src
+          # The goose project has a rust-toolchain.toml that pins a specific version.
+          # We need to add the Android target to THAT toolchain, not just the default.
+          rustup target add aarch64-linux-android
+          rustup show
+
       - name: Build goose binary for Android arm64
         run: |
           cd goose-src
