@@ -888,7 +888,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val toolCall = ToolCall(
             name = name,
             status = ToolCallStatus.RUNNING,
-            arguments = arguments
+            input = arguments ?: ""
         )
         _toolCalls.value = _toolCalls.value + toolCall
 
@@ -899,13 +899,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleToolCallEnd(params: JsonObject) {
         val name = params["name"]?.jsonPrimitive?.contentOrNull ?: "unknown"
         val isError = params["error"]?.jsonPrimitive?.booleanOrNull ?: false
-        val result = params["result"]?.jsonPrimitive?.contentOrNull
+        val output = params["result"]?.jsonPrimitive?.contentOrNull ?: ""
 
         val newStatus = if (isError) ToolCallStatus.ERROR else ToolCallStatus.COMPLETE
 
         _toolCalls.value = _toolCalls.value.map { tc ->
             if (tc.name == name && tc.status == ToolCallStatus.RUNNING) {
-                tc.copy(status = newStatus, result = result)
+                tc.copy(status = newStatus, output = output)
             } else tc
         }
 

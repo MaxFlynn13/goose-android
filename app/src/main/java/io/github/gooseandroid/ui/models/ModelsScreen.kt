@@ -94,7 +94,7 @@ fun ModelsScreen(
                     onDelete = { modelManager.deleteModel(it.id) },
                     onSelect = {
                         scope.launch {
-                            settingsStore.setLocalModelId(it.id)
+                            settingsStore.setString(SettingsKeys.LOCAL_MODEL_ID, it.id)
                             Toast.makeText(context, "${it.name} selected", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -125,7 +125,7 @@ fun ModelsScreen(
                         onDelete = { modelManager.deleteModel(it.id) },
                         onSelect = {
                             scope.launch {
-                                settingsStore.setLocalModelId(it.id)
+                                settingsStore.setString(SettingsKeys.LOCAL_MODEL_ID, it.id)
                                 Toast.makeText(context, "${it.name} selected", Toast.LENGTH_SHORT).show()
                             }
                         }
