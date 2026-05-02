@@ -1,7 +1,6 @@
 package io.github.gooseandroid.ui.panel
 
 import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -18,25 +17,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 
 /**
  * Side Panel — pop-out navigation for all Goose modules.
  *
- * Features:
- * - Thin tab button to open/close (always visible on edge)
+ * - Thin tab button always visible on screen edge
+ * - Tab stays OUTSIDE the panel so it's never covered
  * - Can be positioned left or right (configurable in settings)
  * - Swipe gesture to open/close
- * - Contains all module navigation icons
- *
- * Modules:
- * - Chat/History
- * - Recipes
- * - Skills
- * - Apps (maybe)
- * - Scheduler
- * - Extensions
- * - Brain
- * - Settings
  */
 
 enum class PanelSide { LEFT, RIGHT }
@@ -69,100 +58,129 @@ fun SidePanel(
     modifier: Modifier = Modifier
 ) {
     val panelWidth = 72.dp
-    val tabWidth = 24.dp
+    val tabWidth = 28.dp
+    val tabHeight = 72.dp
 
+    // The entire panel + tab is a Row so the tab is NEVER covered
     Box(modifier = modifier.fillMaxHeight()) {
-        // Panel content (slides in/out)
-        AnimatedVisibility(
-            visible = isOpen,
-            enter = if (side == PanelSide.LEFT) {
-                slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
-            } else {
-                slideInHorizontally(initialOffsetX = { it }) + fadeIn()
-            },
-            exit = if (side == PanelSide.LEFT) {
-                slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
-            } else {
-                slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
-            }
+        Row(
+            modifier = Modifier
+                .fillMaxHeight()
+                .align(if (side == PanelSide.LEFT) Alignment.CenterStart else Alignment.CenterEnd)
         ) {
-            Surface(
-                modifier = Modifier
-                    .width(panelWidth)
-                    .fillMaxHeight(),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shadowElevation = 4.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .padding(vertical = 16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    // Goose logo at top
-                    Icon(
-                        Icons.Default.SmartToy,
-                        contentDescription = "Goose",
-                        modifier = Modifier.size(28.dp).padding(bottom = 8.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+            if (side == PanelSide.RIGHT && isOpen) {
+                // Tab on the left of panel when panel is on right side
+                TabButton(
+                    isOpen = isOpen,
+                    side = side,
+                    tabWidth = tabWidth,
+                    tabHeight = tabHeight,
+                    onToggle = onToggle
+                )
+            }
 
-                    // Module buttons
-                    PANEL_MODULES.forEach { module ->
-                        PanelButton(
-                            module = module,
-                            isSelected = currentRoute == module.route,
-                            onClick = { onNavigate(module.route) }
-                        )
+            // Panel content
+            AnimatedVisibility(
+                visible = isOpen,
+                enter = if (side == PanelSide.LEFT) {
+                    slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
+                } else {
+                    slideInHorizontally(initialOffsetX = { it }) + fadeIn()
+                },
+                exit = if (side == PanelSide.LEFT) {
+                    slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
+                } else {
+                    slideOutHorizontally(targetOffsetX = { it }) + fadeOut()
+                }
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .width(panelWidth)
+                        .fillMaxHeight(),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shadowElevation = 4.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .padding(vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        // Module buttons
+                        PANEL_MODULES.forEach { module ->
+                            PanelButton(
+                                module = module,
+                                isSelected = currentRoute == module.route,
+                                onClick = { onNavigate(module.route) }
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        // Tab button (always visible on the edge)
-        val tabOffset = if (isOpen) {
-            if (side == PanelSide.LEFT) panelWidth else (-panelWidth - tabWidth)
-        } else {
-            0.dp
-        }
-
-        Box(
-            modifier = Modifier
-                .align(if (side == PanelSide.LEFT) Alignment.CenterStart else Alignment.CenterEnd)
-                .offset(x = tabOffset)
-                .width(tabWidth)
-                .height(64.dp)
-                .clip(
-                    if (side == PanelSide.LEFT) {
-                        RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp)
-                    } else {
-                        RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
-                    }
+            if (side == PanelSide.LEFT || !isOpen) {
+                // Tab on the right of panel when panel is on left side
+                // Also shows here when panel is closed (right side)
+                TabButton(
+                    isOpen = isOpen,
+                    side = side,
+                    tabWidth = tabWidth,
+                    tabHeight = tabHeight,
+                    onToggle = onToggle
                 )
-                .background(MaterialTheme.colorScheme.primaryContainer)
-                .clickable { onToggle() }
-                .pointerInput(side) {
-                    detectHorizontalDragGestures { _, dragAmount ->
-                        val shouldOpen = if (side == PanelSide.LEFT) dragAmount > 10 else dragAmount < -10
-                        val shouldClose = if (side == PanelSide.LEFT) dragAmount < -10 else dragAmount > 10
-                        if (shouldOpen && !isOpen) onToggle()
-                        if (shouldClose && isOpen) onToggle()
-                    }
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                if (isOpen) {
-                    if (side == PanelSide.LEFT) Icons.Default.ChevronLeft else Icons.Default.ChevronRight
-                } else {
-                    if (side == PanelSide.LEFT) Icons.Default.ChevronRight else Icons.Default.ChevronLeft
-                },
-                contentDescription = if (isOpen) "Close panel" else "Open panel",
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(16.dp)
+            }
+        }
+
+        // When panel is closed and on right side, position tab at the right edge
+        if (!isOpen && side == PanelSide.RIGHT) {
+            TabButton(
+                isOpen = false,
+                side = side,
+                tabWidth = tabWidth,
+                tabHeight = tabHeight,
+                onToggle = onToggle,
+                modifier = Modifier.align(Alignment.CenterEnd)
             )
         }
+    }
+}
+
+@Composable
+private fun TabButton(
+    isOpen: Boolean,
+    side: PanelSide,
+    tabWidth: androidx.compose.ui.unit.Dp,
+    tabHeight: androidx.compose.ui.unit.Dp,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .width(tabWidth)
+            .height(tabHeight)
+            .clip(
+                if (side == PanelSide.LEFT) {
+                    RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp)
+                } else {
+                    RoundedCornerShape(topStart = 8.dp, bottomStart = 8.dp)
+                }
+            )
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .clickable { onToggle() }
+            .zIndex(10f),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            if (isOpen) {
+                if (side == PanelSide.LEFT) Icons.Default.ChevronLeft else Icons.Default.ChevronRight
+            } else {
+                if (side == PanelSide.LEFT) Icons.Default.ChevronRight else Icons.Default.ChevronLeft
+            },
+            contentDescription = if (isOpen) "Close panel" else "Open panel",
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(18.dp)
+        )
     }
 }
 
@@ -185,7 +203,7 @@ private fun PanelButton(
 
     Surface(
         modifier = Modifier
-            .size(56.dp)
+            .size(52.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() },
         color = bgColor
@@ -199,7 +217,7 @@ private fun PanelButton(
                 module.icon,
                 contentDescription = module.name,
                 tint = iconColor,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(20.dp)
             )
             Text(
                 module.name,

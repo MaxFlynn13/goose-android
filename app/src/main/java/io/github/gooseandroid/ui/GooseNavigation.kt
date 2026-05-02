@@ -7,12 +7,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import io.github.gooseandroid.data.SettingsKeys
+import io.github.gooseandroid.data.SettingsStore
 import io.github.gooseandroid.ui.brain.BrainScreen
 import io.github.gooseandroid.ui.chat.ChatScreen
 import io.github.gooseandroid.ui.chat.ChatViewModel
@@ -28,13 +31,13 @@ import io.github.gooseandroid.ui.settings.SettingsScreen
 
 /**
  * Top-level navigation with side panel.
- *
- * The side panel provides access to all Goose modules:
- * Chat, History, Brain, Extensions, Models, Scheduler, Settings
+ * Reads panel side from persisted settings so changes take effect immediately.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GooseNavigation() {
+    val context = LocalContext.current
+    val settingsStore = remember { SettingsStore(context) }
     val navController = rememberNavController()
     val chatViewModel: ChatViewModel = viewModel()
     val currentBackStack by navController.currentBackStackEntryAsState()
@@ -43,11 +46,9 @@ fun GooseNavigation() {
     var panelOpen by remember { mutableStateOf(false) }
     var appTheme by remember { mutableStateOf(AppTheme()) }
 
-    // Determine panel side from theme settings
-    val panelSide = when (appTheme.panelSide) {
-        io.github.gooseandroid.ui.settings.PanelSide.LEFT -> PanelSide.LEFT
-        io.github.gooseandroid.ui.settings.PanelSide.RIGHT -> PanelSide.RIGHT
-    }
+    // Read panel side from persisted settings
+    val panelSideStr by settingsStore.getString(SettingsKeys.PANEL_SIDE, "LEFT").collectAsState(initial = "LEFT")
+    val panelSide = if (panelSideStr == "RIGHT") PanelSide.RIGHT else PanelSide.LEFT
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Main content
@@ -104,7 +105,6 @@ fun GooseNavigation() {
                 RecipesScreen(
                     onBack = { navController.popBackStack() },
                     onUseRecipe = { recipe ->
-                        // Pre-fill chat with recipe prompt
                         chatViewModel.prefillPrompt(recipe.prompt)
                         navController.navigate("chat") {
                             popUpTo("chat") { inclusive = true }
@@ -116,10 +116,7 @@ fun GooseNavigation() {
             composable("history") {
                 HistoryScreen(
                     onBack = { navController.popBackStack() },
-                    onResumeSession = { sessionId ->
-                        // TODO: Resume session in ChatViewModel
-                        navController.navigate("chat")
-                    }
+                    onResumeSession = { navController.navigate("chat") }
                 )
             }
 
@@ -128,7 +125,6 @@ fun GooseNavigation() {
             }
 
             composable("scheduler") {
-                // Scheduler is a future feature — show informative placeholder
                 Scaffold(
                     topBar = {
                         TopAppBar(title = { Text("Scheduler") })

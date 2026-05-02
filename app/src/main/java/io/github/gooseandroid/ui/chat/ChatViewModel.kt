@@ -123,31 +123,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Handle message when in local-only mode.
-     * Routes to either local model inference or cloud API.
+     * Priority: Cloud API (if key set) > Local model > Error message
      */
     private suspend fun handleLocalMessage(text: String) {
-        // Check if we have a local model selected
-        val localModelId = settingsStore.getLocalModelId().first()
-        val downloadedModels = modelManager.getDownloadedModels()
-        val activeModel = downloadedModels.find { it.id == localModelId }
-
-        if (activeModel != null) {
-            // Use local model inference
-            val modelFile = modelManager.getModelFile(activeModel)
-            if (modelFile.exists()) {
-                addSystemMessage(
-                    "Local model inference is being set up.\n\n" +
-                    "Model: ${activeModel.name}\n" +
-                    "File: ${modelFile.name}\n\n" +
-                    "LiteRT inference engine integration is in progress. " +
-                    "Once complete, this model will respond directly on-device."
-                )
-                // TODO: Wire to actual LiteRT inference
-                return
-            }
-        }
-
-        // Check for cloud API key
+        // Check for cloud API key first (better experience)
         val anthropicKey = settingsStore.getString(SettingsKeys.ANTHROPIC_API_KEY).first()
         val openaiKey = settingsStore.getString(SettingsKeys.OPENAI_API_KEY).first()
         val googleKey = settingsStore.getString(SettingsKeys.GOOGLE_API_KEY).first()
@@ -155,21 +134,83 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         when {
             anthropicKey.isNotBlank() -> {
                 callCloudApi("anthropic", anthropicKey, text)
+                return
             }
             openaiKey.isNotBlank() -> {
                 callCloudApi("openai", openaiKey, text)
+                return
             }
             googleKey.isNotBlank() -> {
                 callCloudApi("google", googleKey, text)
+                return
             }
-            else -> {
-                addSystemMessage(
-                    "No model configured.\n\n" +
-                    "Go to Settings to either:\n" +
-                    "- Add a cloud API key (Anthropic, OpenAI, Google)\n" +
-                    "- Download a local model for offline use"
-                )
+        }
+
+        // No cloud key — try local model
+        val localModelId = settingsStore.getLocalModelId().first()
+        val downloadedModels = modelManager.getDownloadedModels()
+        val activeModel = downloadedModels.find { it.id == localModelId }
+
+        if (activeModel != null) {
+            val modelFile = modelManager.getModelFile(activeModel)
+            if (modelFile.exists()) {
+                // Call the LiteRT inference server
+                callLocalModel(text, activeModel.id)
+                return
             }
+        }
+
+        // Nothing configured
+        addSystemMessage(
+            "No model configured.\n\n" +
+            "Go to Settings to either:\n" +
+            "- Add a cloud API key (Anthropic, OpenAI, Google)\n" +
+            "- Download a local model for offline use"
+        )
+    }
+
+    /**
+     * Call the local LiteRT inference server.
+     */
+    private suspend fun callLocalModel(text: String, modelId: String) {
+        try {
+            val port = GoosePortHolder.port.takeIf { it > 0 } ?: 11435
+            val url = java.net.URL("http://127.0.0.1:$port/v1/chat/completions")
+            val conn = url.openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.connectTimeout = 60_000
+            conn.readTimeout = 120_000
+            conn.doOutput = true
+
+            val escapedText = text.replace("\"", "\\\"").replace("\n", "\\n")
+            val body = """{"model":"$modelId","messages":[{"role":"user","content":"$escapedText"}]}"""
+            conn.outputStream.use { it.write(body.toByteArray()) }
+
+            val responseCode = conn.responseCode
+            if (responseCode != 200) {
+                val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
+                addSystemMessage("Local model error: $error")
+                return
+            }
+
+            val response = conn.inputStream.bufferedReader().readText()
+            val contentMatch = Regex(""""content"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(response)
+            val responseText = contentMatch?.groupValues?.get(1)
+                ?.replace("\\n", "\n")
+                ?.replace("\\\"", "\"")
+                ?.replace("\\\\", "\\")
+                ?: "No response from local model"
+
+            val msg = ChatMessage(
+                id = UUID.randomUUID().toString(),
+                role = MessageRole.ASSISTANT,
+                content = responseText
+            )
+            _messages.value = _messages.value + msg
+        } catch (e: Exception) {
+            Log.e(TAG, "Local model call failed", e)
+            addSystemMessage("Local model error: ${e.message}\n\nThe inference engine may still be loading.")
         }
     }
 

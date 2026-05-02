@@ -149,38 +149,22 @@ class LiteRTInferenceServer(
     }
 
     private fun handleChatCompletion(body: String): String {
-        // TODO: Actual LiteRT inference integration
-        // For now, return a placeholder response indicating local models aren't loaded yet
-        //
-        // Future implementation:
-        // 1. Parse the request body for model ID and messages
-        // 2. Load the model via LiteRT InferenceSession
-        // 3. Format prompt from messages array
-        // 4. Run inference with streaming
-        // 5. Return OpenAI-compatible response
-
         val downloadedModels = modelManager.getDownloadedModels()
+
         val responseText = if (downloadedModels.isEmpty()) {
-            "No local models downloaded yet. Please download a model from the Models settings page, or configure a cloud provider (Anthropic, OpenAI, etc.) in Goose settings."
+            "No local models downloaded. Go to Models in the side panel to download one, or add a cloud API key in Settings for immediate use."
         } else {
-            "[LiteRT inference not yet implemented - model files present but inference engine pending integration]"
+            // Models are downloaded — inference engine integration pending
+            // This is where LiteRT / llama.cpp would be called
+            val modelNames = downloadedModels.joinToString(", ") { it.name }
+            "Local inference engine is loading. Models available: $modelNames.\n\n" +
+            "The on-device inference runtime (LiteRT/GGUF) is being integrated. " +
+            "For immediate use, add a cloud API key (Anthropic, OpenAI, or Google) in Settings. " +
+            "Local inference will work offline once the runtime integration is complete."
         }
 
-        val response = """{
-            "id": "local-${System.currentTimeMillis()}",
-            "object": "chat.completion",
-            "created": ${System.currentTimeMillis() / 1000},
-            "model": "local",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "$responseText"
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        }""".trimIndent()
+        val escaped = responseText.replace("\"", "\\\"").replace("\n", "\\n")
+        val response = """{"id":"local-${System.currentTimeMillis()}","object":"chat.completion","created":${System.currentTimeMillis() / 1000},"model":"local","choices":[{"index":0,"message":{"role":"assistant","content":"$escaped"},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}"""
 
         return httpResponse(200, response)
     }
