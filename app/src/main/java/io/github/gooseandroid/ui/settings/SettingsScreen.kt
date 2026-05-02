@@ -22,79 +22,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.toArgb
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
+import io.github.gooseandroid.data.models.PROVIDER_CATALOG
+import io.github.gooseandroid.data.models.ProviderInfo
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
-
-// --- Data model for provider catalog (local to Settings, avoids name collision
-//     with io.github.gooseandroid.data.models.ProviderInfo) ---
-
-private data class SettingsProviderEntry(
-    val id: String,
-    val name: String,
-    val description: String,
-    val models: List<String>,
-    val requiresApiKey: Boolean = true,
-    val requiresBaseUrl: Boolean = false,
-    val defaultBaseUrl: String = "",
-    val requiresModelName: Boolean = false
-)
-
-private val providerCatalog = listOf(
-    SettingsProviderEntry(
-        id = "anthropic",
-        name = "Anthropic",
-        description = "Claude models with advanced reasoning and coding capabilities",
-        models = listOf("claude-sonnet-4-20250514", "claude-3-5-haiku-20241022")
-    ),
-    SettingsProviderEntry(
-        id = "openai",
-        name = "OpenAI",
-        description = "GPT-4o and reasoning models from OpenAI",
-        models = listOf("gpt-4o", "gpt-4o-mini", "o3-mini")
-    ),
-    SettingsProviderEntry(
-        id = "google",
-        name = "Google Gemini",
-        description = "Gemini multimodal models from Google DeepMind",
-        models = listOf("gemini-2.0-flash", "gemini-2.5-pro-preview-06-05")
-    ),
-    SettingsProviderEntry(
-        id = "mistral",
-        name = "Mistral",
-        description = "Open-weight and commercial models from Mistral AI",
-        models = listOf("mistral-large-latest", "mistral-small-latest")
-    ),
-    SettingsProviderEntry(
-        id = "openrouter",
-        name = "OpenRouter",
-        description = "Unified API gateway to multiple model providers",
-        models = listOf(
-            "anthropic/claude-sonnet-4-20250514",
-            "openai/gpt-4o",
-            "google/gemini-2.0-flash-001"
-        )
-    ),
-    SettingsProviderEntry(
-        id = "ollama",
-        name = "Ollama",
-        description = "Run open-source models locally via Ollama",
-        models = emptyList(),
-        requiresApiKey = false,
-        requiresBaseUrl = true,
-        defaultBaseUrl = "http://localhost:11434"
-    ),
-    SettingsProviderEntry(
-        id = "custom",
-        name = "Custom OpenAI-compatible",
-        description = "Any provider with an OpenAI-compatible API endpoint",
-        models = emptyList(),
-        requiresApiKey = true,
-        requiresBaseUrl = true,
-        requiresModelName = true
-    )
-)
 
 // --- Main Settings Screen ---
 
@@ -157,36 +90,37 @@ fun SettingsScreen(
         settingsStore.getString(SettingsKeys.THEME_MODE, "SYSTEM").collect { themeMode = it }
     }
 
-    // Helper to get the stored key for a provider
-    fun getKeyForProvider(providerId: String): String = when (providerId) {
-        "anthropic" -> anthropicKey
-        "openai" -> openaiKey
-        "google" -> googleKey
-        "mistral" -> mistralKey
-        "openrouter" -> openrouterKey
-        "custom" -> customKey
-        else -> ""
+    // Helper to get the stored key for a provider — uses PROVIDER_CATALOG
+    fun getKeyForProvider(providerId: String): String {
+        val providerInfo = PROVIDER_CATALOG.find { it.id == providerId } ?: return ""
+        val settingsKey = providerInfo.apiKeySettingsKey
+        if (settingsKey.isBlank()) return ""
+        return when (providerId) {
+            "anthropic" -> anthropicKey
+            "openai" -> openaiKey
+            "google" -> googleKey
+            "mistral" -> mistralKey
+            "openrouter" -> openrouterKey
+            "custom" -> customKey
+            else -> ""
+        }
     }
 
-    fun isProviderConfigured(providerId: String): Boolean = when (providerId) {
-        "anthropic" -> anthropicKey.isNotBlank()
-        "openai" -> openaiKey.isNotBlank()
-        "google" -> googleKey.isNotBlank()
-        "mistral" -> mistralKey.isNotBlank()
-        "openrouter" -> openrouterKey.isNotBlank()
-        "ollama" -> ollamaBaseUrl.isNotBlank()
-        "custom" -> customUrl.isNotBlank() && customModel.isNotBlank()
-        else -> false
+    // Uses PROVIDER_CATALOG apiKeySettingsKey to check configuration
+    fun isProviderConfigured(providerId: String): Boolean {
+        val providerInfo = PROVIDER_CATALOG.find { it.id == providerId } ?: return false
+        return when {
+            providerInfo.id == "ollama" -> ollamaBaseUrl.isNotBlank()
+            providerInfo.id == "custom" -> customUrl.isNotBlank() && customModel.isNotBlank()
+            providerInfo.requiresApiKey -> getKeyForProvider(providerId).isNotBlank()
+            else -> true
+        }
     }
 
-    fun settingsKeyForProvider(providerId: String): String = when (providerId) {
-        "anthropic" -> SettingsKeys.ANTHROPIC_API_KEY
-        "openai" -> SettingsKeys.OPENAI_API_KEY
-        "google" -> SettingsKeys.GOOGLE_API_KEY
-        "mistral" -> SettingsKeys.MISTRAL_API_KEY
-        "openrouter" -> SettingsKeys.OPENROUTER_API_KEY
-        "custom" -> SettingsKeys.CUSTOM_PROVIDER_KEY
-        else -> ""
+    // Uses PROVIDER_CATALOG apiKeySettingsKey
+    fun settingsKeyForProvider(providerId: String): String {
+        val providerInfo = PROVIDER_CATALOG.find { it.id == providerId } ?: return ""
+        return providerInfo.apiKeySettingsKey
     }
 
     Scaffold(
@@ -213,7 +147,7 @@ fun SettingsScreen(
                 SectionHeader(title = "Providers", icon = Icons.Filled.Cloud)
             }
 
-            items(providerCatalog, key = { it.id }) { provider ->
+            items(PROVIDER_CATALOG, key = { it.id }) { provider ->
                 ProviderCard(
                     provider = provider,
                     isActive = activeProvider == provider.id,
@@ -232,9 +166,9 @@ fun SettingsScreen(
                     onSelectActive = {
                         scope.launch {
                             settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, provider.id)
-                            // Set default model if provider has models
+                            // Set default model from PROVIDER_CATALOG
                             if (provider.models.isNotEmpty()) {
-                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, provider.models.first())
+                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, provider.models.first().id)
                             }
                         }
                     },
@@ -582,12 +516,12 @@ private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vect
     }
 }
 
-// --- Provider Card ---
+// --- Provider Card (now uses ProviderInfo from ChatModels.kt) ---
 
 @OptIn(FlowPreview::class)
 @Composable
 private fun ProviderCard(
-    provider: SettingsProviderEntry,
+    provider: ProviderInfo,
     isActive: Boolean,
     isConfigured: Boolean,
     isExpanded: Boolean,
@@ -636,7 +570,7 @@ private fun ProviderCard(
                 // Provider info
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = provider.name,
+                        text = provider.displayName,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -690,7 +624,7 @@ private fun ProviderCard(
                 ) {
                     HorizontalDivider()
 
-                    // Base URL field (for Ollama and Custom)
+                    // Base URL field (for providers that require it)
                     if (provider.requiresBaseUrl) {
                         var urlValue by remember(baseUrl) { mutableStateOf(baseUrl) }
                         OutlinedTextField(
@@ -783,7 +717,7 @@ private fun ProviderCard(
     }
 }
 
-// --- Model Selection Card ---
+// --- Model Selection Card (now uses PROVIDER_CATALOG) ---
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -793,12 +727,12 @@ private fun ModelSelectionCard(
     customModel: String,
     onModelSelected: (String) -> Unit
 ) {
-    val provider = providerCatalog.find { it.id == activeProvider }
-    val availableModels = when {
+    val provider = PROVIDER_CATALOG.find { it.id == activeProvider }
+    val availableModels: List<String> = when {
         provider == null -> emptyList()
         provider.id == "custom" -> if (customModel.isNotBlank()) listOf(customModel) else emptyList()
-        provider.id == "ollama" -> emptyList()
-        else -> provider.models
+        provider.id == "ollama" -> provider.models.map { it.id }
+        else -> provider.models.map { it.id }
     }
 
     Card(modifier = Modifier.fillMaxWidth()) {
@@ -827,12 +761,15 @@ private fun ModelSelectionCard(
             } else {
                 var expanded by remember { mutableStateOf(false) }
 
+                // Find display name for the active model
+                val activeModelDisplay = provider?.models?.find { it.id == activeModel }?.displayName ?: activeModel
+
                 ExposedDropdownMenuBox(
                     expanded = expanded,
                     onExpandedChange = { expanded = it }
                 ) {
                     OutlinedTextField(
-                        value = activeModel,
+                        value = activeModelDisplay,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Model") },
@@ -848,15 +785,16 @@ private fun ModelSelectionCard(
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        availableModels.forEach { model ->
+                        availableModels.forEach { modelId ->
+                            val displayName = provider?.models?.find { it.id == modelId }?.displayName ?: modelId
                             DropdownMenuItem(
-                                text = { Text(model) },
+                                text = { Text(displayName) },
                                 onClick = {
-                                    onModelSelected(model)
+                                    onModelSelected(modelId)
                                     expanded = false
                                 },
                                 leadingIcon = {
-                                    if (model == activeModel) {
+                                    if (modelId == activeModel) {
                                         Icon(
                                             Icons.Filled.Check,
                                             contentDescription = "Selected",
@@ -882,7 +820,7 @@ private fun ModelSelectionCard(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "Provider: ${provider?.name ?: activeProvider}",
+                    text = "Provider: ${provider?.displayName ?: activeProvider}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

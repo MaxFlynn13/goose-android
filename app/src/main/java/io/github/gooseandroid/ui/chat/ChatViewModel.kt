@@ -88,6 +88,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _thinkingContent = MutableStateFlow("")
     val thinkingContent: StateFlow<String> = _thinkingContent.asStateFlow()
 
+    private val _lastError = MutableStateFlow<String?>(null)
+    val lastError: StateFlow<String?> = _lastError.asStateFlow()
+
     val tokenCount: StateFlow<Int> = _messages
         .map { msgs -> msgs.sumOf { it.content.length } / 4 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
@@ -203,22 +206,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── Public Methods (delegating) ────────────────────────────────────────────
 
-    // Fix #1: No longer blocks the main thread. Generates session ID synchronously,
-    // updates state synchronously, then launches coroutine for I/O.
+    // Session ID and state are set synchronously BEFORE any coroutine launch.
     fun createNewSession() {
         val newId = UUID.randomUUID().toString()
+        Log.i(TAG, "createNewSession: id=$newId")
+
         val newSession = SessionInfo(
             id = newId,
             title = "New Chat",
             createdAt = System.currentTimeMillis()
         )
-        _sessions.value = _sessions.value + newSession
+
+        // Synchronous state updates — _currentSessionId is set BEFORE returning
         _currentSessionId.value = newId
+        _sessions.value = _sessions.value + newSession
         _messages.value = emptyList()
         _toolCalls.value = emptyList()
         _streamingContent.value = ""
         _isLoadingSession.value = false
 
+        Log.i(TAG, "createNewSession: state updated synchronously, currentSessionId=${_currentSessionId.value}")
+
+        // Only the disk I/O is async
         viewModelScope.launch(Dispatchers.IO) {
             sessionManager.persistNewSession(newSession)
         }
@@ -240,7 +249,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { sessionManager.renameSession(sessionId, newTitle) }
     }
 
-    // Fix #2: No longer blocks the main thread. Launches coroutine internally.
     fun forkSession(sessionId: String) {
         viewModelScope.launch {
             val forkedId = sessionManager.forkSession(sessionId)
@@ -248,7 +256,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Fix #3: No longer blocks the main thread. Sets result in exportedJson StateFlow.
     fun exportSession(sessionId: String) {
         viewModelScope.launch {
             val json = sessionManager.exportSession(sessionId)
@@ -258,6 +265,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearExportedJson() {
         _exportedJson.value = null
+    }
+
+    fun clearLastError() {
+        _lastError.value = null
     }
 
     fun prefillPrompt(prompt: String) {
@@ -352,7 +363,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendMessage(text: String) {
-        if (_currentSessionId.value == null) createNewSession()
+        Log.i(TAG, "sendMessage: entering, currentSessionId=${_currentSessionId.value}, text='${text.take(50)}...'")
+
+        if (_currentSessionId.value == null) {
+            Log.i(TAG, "sendMessage: no session, creating new one")
+            createNewSession()
+        }
+
+        Log.i(TAG, "sendMessage: sessionId=${_currentSessionId.value}")
 
         val userMsg = ChatMessage(
             id = UUID.randomUUID().toString(),
@@ -367,42 +385,82 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _isGenerating.value = true
             _streamingContent.value = ""
             _thinkingContent.value = ""
+            _lastError.value = null
+
+            // Track the assistant placeholder ID so we can check it after completion
+            var assistantPlaceholderId: String? = null
 
             try {
                 kotlinx.coroutines.withTimeout(120_000L) {
-                    if (!GoosePortHolder.localOnlyMode && acpClient != null) {
+                    val isAcpMode = !GoosePortHolder.localOnlyMode && acpClient != null
+                    Log.i(TAG, "sendMessage: isAcpMode=$isAcpMode, localOnlyMode=${GoosePortHolder.localOnlyMode}, acpClient=${acpClient != null}")
+
+                    if (isAcpMode) {
+                        Log.i(TAG, "sendMessage: sending via ACP")
                         acpClient!!.sendPrompt(text)
                     } else {
-                        val assistantId = addAssistantPlaceholder()
+                        Log.i(TAG, "sendMessage: sending via local/cloud path")
+                        assistantPlaceholderId = addAssistantPlaceholder()
+                        Log.i(TAG, "sendMessage: added assistant placeholder id=$assistantPlaceholderId")
+
                         val found = localModelClient.handleLocalMessage(
-                            _messages.value, activeSystemPrompt, createStreamingCallbacks(assistantId)
+                            _messages.value, activeSystemPrompt, createStreamingCallbacks(assistantPlaceholderId!!)
                         )
+                        Log.i(TAG, "sendMessage: handleLocalMessage returned found=$found")
+
                         if (!found) {
-                            removeMessage(assistantId)
-                            addSystemMessage(
-                                "No model configured.\n\n" +
+                            removeMessage(assistantPlaceholderId!!)
+                            val errorMsg = "No model configured.\n\n" +
                                 "Go to Settings to add a cloud API key or download a local model."
-                            )
+                            _lastError.value = errorMsg
+                            addSystemMessage(errorMsg)
                         }
                     }
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 Log.e(TAG, "Message timed out after 120s", e)
-                addSystemMessage("Request timed out. Check your network connection and try again.")
+                val errorMsg = "Request timed out. Check your network connection and try again."
+                _lastError.value = errorMsg
+                addSystemMessage(errorMsg)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 Log.d(TAG, "Message cancelled")
                 throw e // Don't swallow cancellation
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending message", e)
-                addSystemMessage("Error: ${e.message}")
+                val errorMsg = "Error: ${e.message}"
+                _lastError.value = errorMsg
+                addSystemMessage(errorMsg)
             } finally {
                 _isGenerating.value = false
+
+                // Check if the assistant placeholder message is still empty after everything completed.
+                // This catches the case where streaming callbacks never fired or the API threw after
+                // the placeholder was added but before any tokens arrived.
+                if (assistantPlaceholderId != null) {
+                    val msgs = _messages.value
+                    val assistantMsg = msgs.find { it.id == assistantPlaceholderId }
+                    if (assistantMsg != null && assistantMsg.content.isBlank()) {
+                        Log.w(TAG, "sendMessage: assistant placeholder still empty after completion, replacing with error")
+                        val fallbackError = "No response received — check your API key and network connection."
+                        _lastError.value = fallbackError
+                        _messages.value = msgs.map { msg ->
+                            if (msg.id == assistantPlaceholderId) msg.copy(content = fallbackError) else msg
+                        }
+                    }
+                }
+
+                Log.i(TAG, "sendMessage: finished, isGenerating=false, messageCount=${_messages.value.size}")
             }
         }
     }
 
     fun sendMessageWithAttachments(text: String, attachments: List<AttachmentInfo>) {
-        if (_currentSessionId.value == null) createNewSession()
+        Log.i(TAG, "sendMessageWithAttachments: entering, attachments=${attachments.size}")
+
+        if (_currentSessionId.value == null) {
+            Log.i(TAG, "sendMessageWithAttachments: no session, creating new one")
+            createNewSession()
+        }
 
         val contentBuilder = StringBuilder()
         val textAttachments = attachments.filter { !it.isImage }
@@ -434,34 +492,66 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _isGenerating.value = true
             _streamingContent.value = ""
             _thinkingContent.value = ""
+            _lastError.value = null
+
+            var assistantPlaceholderId: String? = null
 
             try {
                 kotlinx.coroutines.withTimeout(120_000L) {
-                    if (!GoosePortHolder.localOnlyMode && acpClient != null) {
+                    val isAcpMode = !GoosePortHolder.localOnlyMode && acpClient != null
+                    Log.i(TAG, "sendMessageWithAttachments: isAcpMode=$isAcpMode")
+
+                    if (isAcpMode) {
                         val base64Images = imageAttachments.map { it.content }
                         acpClient!!.sendPrompt(contentBuilder.toString(), base64Images)
                     } else {
-                        val assistantId = addAssistantPlaceholder()
+                        assistantPlaceholderId = addAssistantPlaceholder()
+                        Log.i(TAG, "sendMessageWithAttachments: added assistant placeholder id=$assistantPlaceholderId")
+
                         val found = localModelClient.handleLocalMessageWithAttachments(
                             _messages.value, imageAttachments, activeSystemPrompt,
-                            createStreamingCallbacks(assistantId)
+                            createStreamingCallbacks(assistantPlaceholderId!!)
                         )
+                        Log.i(TAG, "sendMessageWithAttachments: handleLocalMessageWithAttachments returned found=$found")
+
                         if (!found) {
-                            removeMessage(assistantId)
-                            addSystemMessage("No model configured.\n\nGo to Settings to configure a provider.")
+                            removeMessage(assistantPlaceholderId!!)
+                            val errorMsg = "No model configured.\n\nGo to Settings to configure a provider."
+                            _lastError.value = errorMsg
+                            addSystemMessage(errorMsg)
                         }
                     }
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 Log.e(TAG, "Message with attachments timed out", e)
-                addSystemMessage("Request timed out. Check your network connection and try again.")
+                val errorMsg = "Request timed out. Check your network connection and try again."
+                _lastError.value = errorMsg
+                addSystemMessage(errorMsg)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending message with attachments", e)
-                addSystemMessage("Error: ${e.message}")
+                val errorMsg = "Error: ${e.message}"
+                _lastError.value = errorMsg
+                addSystemMessage(errorMsg)
             } finally {
                 _isGenerating.value = false
+
+                // Check if the assistant placeholder message is still empty
+                if (assistantPlaceholderId != null) {
+                    val msgs = _messages.value
+                    val assistantMsg = msgs.find { it.id == assistantPlaceholderId }
+                    if (assistantMsg != null && assistantMsg.content.isBlank()) {
+                        Log.w(TAG, "sendMessageWithAttachments: assistant placeholder still empty, replacing with error")
+                        val fallbackError = "No response received — check your API key and network connection."
+                        _lastError.value = fallbackError
+                        _messages.value = msgs.map { msg ->
+                            if (msg.id == assistantPlaceholderId) msg.copy(content = fallbackError) else msg
+                        }
+                    }
+                }
+
+                Log.i(TAG, "sendMessageWithAttachments: finished, isGenerating=false")
             }
         }
     }
@@ -482,6 +572,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val activeProvider = settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER).first()
                 val activeModel = settingsStore.getString(SettingsKeys.ACTIVE_MODEL).first()
                 val apiKey = cloudApiClient.getApiKeyForProvider(activeProvider)
+
+                Log.i(TAG, "compactConversation: provider=$activeProvider, model=$activeModel")
 
                 if (apiKey.isBlank() && activeProvider != "custom" && activeProvider != "local") {
                     addSystemMessage("Cannot compact: no API key configured for provider '$activeProvider'.")
@@ -557,7 +649,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun createStreamingCallbacks(assistantId: String): CloudApiClient.StreamingCallbacks {
         return object : CloudApiClient.StreamingCallbacks {
-            // Fix #5: Only update the last message efficiently instead of mapping the entire list
             override fun onToken(token: String) {
                 _streamingContent.value = token
                 val currentMessages = _messages.value
@@ -576,6 +667,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             override fun onComplete(fullContent: String) {
+                Log.i(TAG, "StreamingCallbacks.onComplete: contentLength=${fullContent.length}")
                 val finalContent = fullContent.ifBlank { "No response received" }
                 val thinkingText = _thinkingContent.value
                 _messages.value = _messages.value.map { msg ->
@@ -594,6 +686,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             override fun onError(error: String) {
+                Log.e(TAG, "StreamingCallbacks.onError: $error")
                 val current = _streamingContent.value
                 if (current.isBlank()) {
                     _messages.value = _messages.value.map { msg ->
@@ -603,6 +696,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _streamingContent.value = ""
                 _thinkingContent.value = ""
                 _isGenerating.value = false
+                _lastError.value = error
                 if (current.isBlank()) {
                     addSystemMessage(error)
                 }
@@ -663,7 +757,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.value = currentMessages.map { if (it.id == lastAssistant.id) updated else it }
     }
 
-    // Fix #4: Use NonCancellable coroutine instead of runBlocking to avoid ANR
     override fun onCleared() {
         super.onCleared()
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
