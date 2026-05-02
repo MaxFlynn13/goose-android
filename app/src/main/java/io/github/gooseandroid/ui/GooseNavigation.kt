@@ -43,8 +43,10 @@ import io.github.gooseandroid.ui.settings.SettingsScreen
  * when opened. Panel side (left / right) is read from DataStore so the
  * user's preference is applied immediately on launch.
  *
- * ChatViewModel is created here and shared with ChatScreen so conversation
- * state survives navigation between destinations.
+ * ChatViewModel is created here and shared across navigation so conversation
+ * state survives navigation between destinations. New sessions can be created
+ * from multiple places (panel, history screen, chat screen) and previous
+ * sessions can be resumed from history.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,6 +74,28 @@ fun GooseNavigation() {
         label = "scrimAlpha"
     )
 
+    // Shared navigation helper: close panel and navigate
+    val navigateAndClosePanel: (String) -> Unit = { route ->
+        panelOpen = false
+        if (route != currentRoute) {
+            navController.navigate(route) {
+                popUpTo("chat") { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
+
+    // Shared action: create a new chat session and navigate to chat
+    val startNewChat: () -> Unit = {
+        panelOpen = false
+        chatViewModel.createNewSession()
+        navController.navigate("chat") {
+            popUpTo("chat") { inclusive = true }
+            launchSingleTop = true
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         // ---- Main content: always fills the full screen ----
         NavHost(
@@ -79,36 +103,26 @@ fun GooseNavigation() {
             startDestination = "chat",
             modifier = Modifier.fillMaxSize()
         ) {
-            // Chat gets special treatment — no wrapping Scaffold here.
-            // ChatScreen manages its own layout including its top bar.
             composable("chat") {
                 ChatScreen(
                     viewModel = chatViewModel,
-                    onMenuClick = { panelOpen = true }
+                    onMenuClick = { panelOpen = true },
+                    onNewChat = startNewChat,
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 
-            composable("brain") {
-                BrainScreen(onBack = { navController.popBackStack() })
-            }
-
-            composable("models") {
-                ModelsScreen(onBack = { navController.popBackStack() })
-            }
-
-            composable("settings") {
-                SettingsScreen(
+            composable("history") {
+                HistoryScreen(
                     onBack = { navController.popBackStack() },
-                    onNavigateToModels = { navController.navigate("models") },
-                    onNavigateToAppearance = { navController.navigate("appearance") }
-                )
-            }
-
-            composable("appearance") {
-                AppearanceSettingsScreen(
-                    currentTheme = appTheme,
-                    onThemeChanged = { appTheme = it },
-                    onBack = { navController.popBackStack() }
+                    onResumeSession = { sessionId ->
+                        chatViewModel.switchSession(sessionId)
+                        navController.navigate("chat") {
+                            popUpTo("chat") { inclusive = true }
+                            launchSingleTop = true
+                        }
+                    },
+                    onNewChat = startNewChat
                 )
             }
 
@@ -124,15 +138,33 @@ fun GooseNavigation() {
                 )
             }
 
-            composable("history") {
-                HistoryScreen(
-                    onBack = { navController.popBackStack() },
-                    onResumeSession = { navController.navigate("chat") }
-                )
+            composable("brain") {
+                BrainScreen(onBack = { navController.popBackStack() })
             }
 
             composable("extensions") {
                 ExtensionsScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable("models") {
+                ModelsScreen(onBack = { navController.popBackStack() })
+            }
+
+            composable("settings") {
+                SettingsScreen(
+                    onBack = { navController.popBackStack() },
+                    onNavigateToModels = { navController.navigate("models") },
+                    onNavigateToAppearance = { navController.navigate("appearance") },
+                    onNavigateToExtensions = { navController.navigate("extensions") }
+                )
+            }
+
+            composable("appearance") {
+                AppearanceSettingsScreen(
+                    currentTheme = appTheme,
+                    onThemeChanged = { appTheme = it },
+                    onBack = { navController.popBackStack() }
+                )
             }
 
             composable("scheduler") {

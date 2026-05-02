@@ -7,108 +7,107 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "goose_settings")
+
 /**
- * Persistent settings storage using DataStore.
- * All settings survive app restart and navigation.
+ * All settings keys used across the app.
  */
-val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "goose_settings")
-
 object SettingsKeys {
-    // API Keys
-    val ANTHROPIC_API_KEY = stringPreferencesKey("anthropic_api_key")
-    val OPENAI_API_KEY = stringPreferencesKey("openai_api_key")
-    val GOOGLE_API_KEY = stringPreferencesKey("google_api_key")
-    val OPENROUTER_API_KEY = stringPreferencesKey("openrouter_api_key")
+    // Provider API keys
+    const val ANTHROPIC_API_KEY = "anthropic_api_key"
+    const val OPENAI_API_KEY = "openai_api_key"
+    const val GOOGLE_API_KEY = "google_api_key"
+    const val MISTRAL_API_KEY = "mistral_api_key"
+    const val OPENROUTER_API_KEY = "openrouter_api_key"
 
-    // Provider config
-    val ACTIVE_PROVIDER = stringPreferencesKey("active_provider")
-    val ACTIVE_MODEL = stringPreferencesKey("active_model")
-    val LOCAL_MODEL_ID = stringPreferencesKey("local_model_id")
+    // Custom provider
+    const val CUSTOM_PROVIDER_URL = "custom_provider_url"
+    const val CUSTOM_PROVIDER_KEY = "custom_provider_key"
+    const val CUSTOM_PROVIDER_MODEL = "custom_provider_model"
+
+    // Ollama
+    const val OLLAMA_BASE_URL = "ollama_base_url"
+
+    // Active provider/model selection
+    const val ACTIVE_PROVIDER = "active_provider"
+    const val ACTIVE_MODEL = "active_model"
+
+    // Local model
+    const val LOCAL_MODEL_ID = "local_model_id"
 
     // Appearance
-    val THEME_MODE = stringPreferencesKey("theme_mode")
-    val PRIMARY_COLOR = intPreferencesKey("primary_color")
-    val SECONDARY_COLOR = intPreferencesKey("secondary_color")
-    val ACCENT_COLOR = intPreferencesKey("accent_color")
-    val TEXT_SCALE = floatPreferencesKey("text_scale")
-    val PANEL_SIDE = stringPreferencesKey("panel_side")
+    const val THEME_MODE = "theme_mode"
+    const val PRIMARY_COLOR = "primary_color"
+    const val SECONDARY_COLOR = "secondary_color"
+    const val ACCENT_COLOR = "accent_color"
+    const val TEXT_SCALE = "text_scale"
+    const val PANEL_SIDE = "panel_side"
 
     // Extensions
-    val EXTENSION_DEVELOPER = booleanPreferencesKey("ext_developer")
-    val EXTENSION_MEMORY = booleanPreferencesKey("ext_memory")
+    const val EXTENSION_DEVELOPER = "ext_developer"
+    const val EXTENSION_MEMORY = "ext_memory"
+
+    // General
+    const val AUTO_COMPACT = "auto_compact"
+    const val WORKING_DIRECTORY = "working_directory"
+    const val SHELL_PATH = "shell_path"
 }
 
+/**
+ * Persistent settings storage backed by DataStore.
+ */
 class SettingsStore(private val context: Context) {
 
-    private val dataStore = context.settingsDataStore
-
-    // === Read ===
-
-    fun getString(key: Preferences.Key<String>, default: String = ""): Flow<String> =
-        dataStore.data.map { it[key] ?: default }
-
-    fun getInt(key: Preferences.Key<Int>, default: Int = 0): Flow<Int> =
-        dataStore.data.map { it[key] ?: default }
-
-    fun getFloat(key: Preferences.Key<Float>, default: Float = 1.0f): Flow<Float> =
-        dataStore.data.map { it[key] ?: default }
-
-    fun getBoolean(key: Preferences.Key<Boolean>, default: Boolean = false): Flow<Boolean> =
-        dataStore.data.map { it[key] ?: default }
-
-    // === Write ===
-
-    suspend fun setString(key: Preferences.Key<String>, value: String) {
-        dataStore.edit { it[key] = value }
+    // String
+    fun getString(key: String, default: String = ""): Flow<String> {
+        val prefKey = stringPreferencesKey(key)
+        return context.dataStore.data.map { prefs -> prefs[prefKey] ?: default }
     }
 
-    suspend fun setInt(key: Preferences.Key<Int>, value: Int) {
-        dataStore.edit { it[key] = value }
+    suspend fun setString(key: String, value: String) {
+        val prefKey = stringPreferencesKey(key)
+        context.dataStore.edit { prefs -> prefs[prefKey] = value }
     }
 
-    suspend fun setFloat(key: Preferences.Key<Float>, value: Float) {
-        dataStore.edit { it[key] = value }
+    // Int
+    fun getInt(key: String, default: Int = 0): Flow<Int> {
+        val prefKey = intPreferencesKey(key)
+        return context.dataStore.data.map { prefs -> prefs[prefKey] ?: default }
     }
 
-    suspend fun setBoolean(key: Preferences.Key<Boolean>, value: Boolean) {
-        dataStore.edit { it[key] = value }
+    suspend fun setInt(key: String, value: Int) {
+        val prefKey = intPreferencesKey(key)
+        context.dataStore.edit { prefs -> prefs[prefKey] = value }
     }
 
-    // === Convenience ===
-
-    suspend fun setApiKey(provider: String, key: String) {
-        val prefKey = when (provider.lowercase()) {
-            "anthropic" -> SettingsKeys.ANTHROPIC_API_KEY
-            "openai" -> SettingsKeys.OPENAI_API_KEY
-            "google" -> SettingsKeys.GOOGLE_API_KEY
-            "openrouter" -> SettingsKeys.OPENROUTER_API_KEY
-            else -> return
-        }
-        dataStore.edit { it[prefKey] = key }
+    // Float
+    fun getFloat(key: String, default: Float = 0f): Flow<Float> {
+        val prefKey = floatPreferencesKey(key)
+        return context.dataStore.data.map { prefs -> prefs[prefKey] ?: default }
     }
 
-    fun getApiKey(provider: String): Flow<String> {
-        val prefKey = when (provider.lowercase()) {
-            "anthropic" -> SettingsKeys.ANTHROPIC_API_KEY
-            "openai" -> SettingsKeys.OPENAI_API_KEY
-            "google" -> SettingsKeys.GOOGLE_API_KEY
-            "openrouter" -> SettingsKeys.OPENROUTER_API_KEY
-            else -> return kotlinx.coroutines.flow.flowOf("")
-        }
-        return dataStore.data.map { it[prefKey] ?: "" }
+    suspend fun setFloat(key: String, value: Float) {
+        val prefKey = floatPreferencesKey(key)
+        context.dataStore.edit { prefs -> prefs[prefKey] = value }
     }
 
-    suspend fun setActiveModel(modelId: String) {
-        dataStore.edit { it[SettingsKeys.ACTIVE_MODEL] = modelId }
+    // Boolean
+    fun getBoolean(key: String, default: Boolean = false): Flow<Boolean> {
+        val prefKey = booleanPreferencesKey(key)
+        return context.dataStore.data.map { prefs -> prefs[prefKey] ?: default }
     }
 
-    fun getActiveModel(): Flow<String> =
-        dataStore.data.map { it[SettingsKeys.ACTIVE_MODEL] ?: "" }
-
-    suspend fun setLocalModelId(modelId: String) {
-        dataStore.edit { it[SettingsKeys.LOCAL_MODEL_ID] = modelId }
+    suspend fun setBoolean(key: String, value: Boolean) {
+        val prefKey = booleanPreferencesKey(key)
+        context.dataStore.edit { prefs -> prefs[prefKey] = value }
     }
 
-    fun getLocalModelId(): Flow<String> =
-        dataStore.data.map { it[SettingsKeys.LOCAL_MODEL_ID] ?: "" }
+    // Convenience: get local model ID
+    fun getLocalModelId(): Flow<String> = getString(SettingsKeys.LOCAL_MODEL_ID)
+
+    // Convenience: get active provider
+    fun getActiveProvider(): Flow<String> = getString(SettingsKeys.ACTIVE_PROVIDER, "anthropic")
+
+    // Convenience: get active model
+    fun getActiveModel(): Flow<String> = getString(SettingsKeys.ACTIVE_MODEL, "claude-sonnet-4-20250514")
 }
