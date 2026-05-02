@@ -290,39 +290,40 @@ jobs:
 
           # === Patch 4: goose-cli update.rs asset_name() ===
           # The asset_name() function has cfg branches for mac/linux/windows
-          # but not Android, causing a "returns ()" error.
-          # Replace the entire function with one that includes Android.
+          # but not Android. We write a new version of the file's first function.
           UPDATE_RS="crates/goose-cli/src/commands/update.rs"
           if [ -f "$UPDATE_RS" ]; then
             echo "Patching goose-cli update.rs for Android"
-            python3 -c "
-          import re
-          with open('$UPDATE_RS', 'r') as f:
-              content = f.read()
-          # Replace the asset_name function entirely
-          new_fn = '''fn asset_name() -> &'static str {
-              #[cfg(all(target_os = \"macos\", target_arch = \"aarch64\"))]
-              { \"goose-aarch64-apple-darwin.tar.bz2\" }
-              #[cfg(all(target_os = \"macos\", target_arch = \"x86_64\"))]
-              { \"goose-x86_64-apple-darwin.tar.bz2\" }
-              #[cfg(all(target_os = \"linux\", target_arch = \"x86_64\"))]
-              { \"goose-x86_64-unknown-linux-gnu.tar.bz2\" }
-              #[cfg(all(target_os = \"linux\", target_arch = \"aarch64\"))]
-              { \"goose-aarch64-unknown-linux-gnu.tar.bz2\" }
-              #[cfg(target_os = \"windows\")]
-              { \"goose-x86_64-pc-windows-msvc.zip\" }
-              #[cfg(target_os = \"android\")]
-              { \"goose-aarch64-linux-android\" }
-              #[cfg(not(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\", target_os = \"android\")))]
-              { \"goose-unknown\" }
-          }'''
-          # Match from 'fn asset_name' to the next function or closing brace pattern
-          pattern = r'fn asset_name\(\)[^{]*\{[^}]*(?:\{[^}]*\}[^}]*)*\}'
-          content = re.sub(pattern, new_fn, content, count=1)
-          with open('$UPDATE_RS', 'w') as f:
-              f.write(content)
-          "
-            echo "update.rs patched"
+            # Strategy: find line number of "fn asset_name" and "fn binary_name"
+            # Replace everything between them with our version
+            START=$(grep -n "^fn asset_name" "$UPDATE_RS" | head -1 | cut -d: -f1)
+            END=$(grep -n "^fn binary_name\|^/// Binary name" "$UPDATE_RS" | head -1 | cut -d: -f1)
+            if [ -n "$START" ] && [ -n "$END" ]; then
+              END=$((END - 1))
+              # Delete lines START to END, insert our replacement
+              sed -i "${START},${END}d" "$UPDATE_RS"
+              sed -i "$((START-1))a\\
+          fn asset_name() -> \&'static str {\\
+              #[cfg(all(target_os = \"macos\", target_arch = \"aarch64\"))]\\
+              { \"goose-aarch64-apple-darwin.tar.bz2\" }\\
+              #[cfg(all(target_os = \"macos\", target_arch = \"x86_64\"))]\\
+              { \"goose-x86_64-apple-darwin.tar.bz2\" }\\
+              #[cfg(all(target_os = \"linux\", target_arch = \"x86_64\"))]\\
+              { \"goose-x86_64-unknown-linux-gnu.tar.bz2\" }\\
+              #[cfg(all(target_os = \"linux\", target_arch = \"aarch64\"))]\\
+              { \"goose-aarch64-unknown-linux-gnu.tar.bz2\" }\\
+              #[cfg(target_os = \"windows\")]\\
+              { \"goose-x86_64-pc-windows-msvc.zip\" }\\
+              #[cfg(target_os = \"android\")]\\
+              { \"goose-aarch64-linux-android\" }\\
+              #[cfg(not(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\", target_os = \"android\")))]\\
+              { \"goose-unknown\" }\\
+          }\\
+          " "$UPDATE_RS"
+              echo "update.rs patched (lines $START-$END replaced)"
+            else
+              echo "WARNING: Could not find asset_name function boundaries"
+            fi
           fi
 
           # Build with minimal features for Android
