@@ -5,23 +5,30 @@ import io.github.gooseandroid.data.models.*
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -43,46 +50,117 @@ fun UserBubble(
     message: ChatMessage,
     onRetry: (String) -> Unit,
     onDelete: (ChatMessage) -> Unit,
+    onEdit: (String, String) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var isEditing by remember { mutableStateOf(false) }
+    var editText by remember { mutableStateOf(message.content) }
 
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.End
     ) {
-        Box {
+        if (isEditing) {
+            // Inline edit mode
             Surface(
-                shape = RoundedCornerShape(
-                    topStart = 16.dp,
-                    topEnd = 16.dp,
-                    bottomStart = 16.dp,
-                    bottomEnd = 4.dp
-                ),
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .widthIn(max = 300.dp)
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = { showMenu = true }
-                    )
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.widthIn(max = 320.dp)
             ) {
-                Text(
-                    text = message.content,
-                    modifier = Modifier.padding(12.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    style = MaterialTheme.typography.bodyMedium
+                Column(modifier = Modifier.padding(12.dp)) {
+                    BasicTextField(
+                        value = editText,
+                        onValueChange = { editText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 40.dp, max = 200.dp),
+                        textStyle = TextStyle(
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontSize = 14.sp
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = {
+                                isEditing = false
+                                editText = message.content
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Cancel edit",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            onClick = {
+                                if (editText.isNotBlank() && editText != message.content) {
+                                    onEdit(message.id, editText)
+                                }
+                                isEditing = false
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Confirm edit",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            // Normal display mode
+            Box {
+                Surface(
+                    shape = RoundedCornerShape(
+                        topStart = 16.dp,
+                        topEnd = 16.dp,
+                        bottomStart = 16.dp,
+                        bottomEnd = 4.dp
+                    ),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .widthIn(max = 300.dp)
+                        .combinedClickable(
+                            onClick = {},
+                            onLongClick = { showMenu = true }
+                        )
+                ) {
+                    Text(
+                        text = message.content,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+
+                MessageActionsPopup(
+                    expanded = showMenu,
+                    onDismiss = { showMenu = false },
+                    messageContent = message.content,
+                    showRetry = true,
+                    showEdit = true,
+                    onRetry = { onRetry(message.content) },
+                    onEdit = {
+                        editText = message.content
+                        isEditing = true
+                    },
+                    onDelete = { onDelete(message) }
                 )
             }
-
-            MessageActionsPopup(
-                expanded = showMenu,
-                onDismiss = { showMenu = false },
-                messageContent = message.content,
-                showRetry = true,
-                onRetry = { onRetry(message.content) },
-                onDelete = { onDelete(message) }
-            )
         }
     }
 }
@@ -104,6 +182,12 @@ fun AssistantBubble(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
     ) {
+        // Thinking section (collapsible)
+        if (message.thinking.isNotBlank()) {
+            ThinkingSection(thinkingText = message.thinking)
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
         Box {
             Surface(
                 shape = RoundedCornerShape(
@@ -153,9 +237,62 @@ fun AssistantBubble(
         // Tool calls attached to this message
         if (message.toolCalls.isNotEmpty()) {
             Spacer(modifier = Modifier.height(4.dp))
-            message.toolCalls.forEach { toolCall ->
-                ToolCallCard(toolCall = toolCall)
-                Spacer(modifier = Modifier.height(4.dp))
+            ToolCallChain(toolCalls = message.toolCalls)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Thinking Section (collapsible display of model reasoning)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun ThinkingSection(
+    thinkingText: String,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        modifier = modifier
+            .widthIn(max = 340.dp)
+            .animateContentSize()
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Thinking…",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    fontStyle = FontStyle.Italic,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse thinking" else "Expand thinking",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = thinkingText,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontStyle = FontStyle.Italic,
+                        lineHeight = 18.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
             }
         }
     }

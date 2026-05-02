@@ -5,6 +5,7 @@ import io.github.gooseandroid.data.models.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -16,7 +17,7 @@ import androidx.compose.ui.text.AnnotatedString
 
 /**
  * Dropdown popup shown on long press of a message bubble.
- * Provides copy, retry (user messages only), and delete actions.
+ * Provides copy, edit (user messages only), retry (user messages only), and delete actions.
  */
 @Composable
 fun MessageActionsPopup(
@@ -24,7 +25,9 @@ fun MessageActionsPopup(
     onDismiss: () -> Unit,
     messageContent: String,
     showRetry: Boolean,
+    showEdit: Boolean = false,
     onRetry: () -> Unit,
+    onEdit: () -> Unit = {},
     onDelete: () -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -43,6 +46,18 @@ fun MessageActionsPopup(
                 Icon(Icons.Default.ContentCopy, contentDescription = null)
             }
         )
+        if (showEdit) {
+            DropdownMenuItem(
+                text = { Text("Edit") },
+                onClick = {
+                    onEdit()
+                    onDismiss()
+                },
+                leadingIcon = {
+                    Icon(Icons.Default.Edit, contentDescription = null)
+                }
+            )
+        }
         if (showRetry) {
             DropdownMenuItem(
                 text = { Text("Retry") },

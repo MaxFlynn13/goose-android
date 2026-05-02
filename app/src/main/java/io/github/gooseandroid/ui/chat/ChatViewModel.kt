@@ -61,6 +61,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    private val _isLoadingSession = MutableStateFlow(false)
+    val isLoadingSession: StateFlow<Boolean> = _isLoadingSession.asStateFlow()
+
     private val _streamingContent = MutableStateFlow("")
     val streamingContent: StateFlow<String> = _streamingContent.asStateFlow()
 
@@ -81,6 +84,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _exportedJson = MutableStateFlow<String?>(null)
     val exportedJson: StateFlow<String?> = _exportedJson.asStateFlow()
+
+    private val _thinkingContent = MutableStateFlow("")
+    val thinkingContent: StateFlow<String> = _thinkingContent.asStateFlow()
 
     val tokenCount: StateFlow<Int> = _messages
         .map { msgs -> msgs.sumOf { it.content.length } / 4 }
@@ -211,6 +217,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.value = emptyList()
         _toolCalls.value = emptyList()
         _streamingContent.value = ""
+        _isLoadingSession.value = false
 
         viewModelScope.launch(Dispatchers.IO) {
             sessionManager.persistNewSession(newSession)
@@ -218,7 +225,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun switchSession(sessionId: String) {
-        viewModelScope.launch { sessionManager.switchSession(sessionId) }
+        viewModelScope.launch {
+            _isLoadingSession.value = true
+            sessionManager.switchSession(sessionId)
+            _isLoadingSession.value = false
+        }
     }
 
     fun deleteSession(sessionId: String) {
@@ -319,6 +330,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Edit a previously sent user message and re-send it.
+     * Removes the edited message and all messages after it (including assistant responses),
+     * then sends the new content as a fresh message to regenerate.
+     */
+    fun editAndResend(messageId: String, newContent: String) {
+        val currentMessages = _messages.value
+        val messageIndex = currentMessages.indexOfFirst { it.id == messageId }
+        if (messageIndex == -1) return
+
+        // Keep only messages before the edited one (remove it and everything after)
+        _messages.value = currentMessages.subList(0, messageIndex)
+
+        // Clear tool calls and streaming state
+        _toolCalls.value = emptyList()
+        _streamingContent.value = ""
+
+        // Send the new content (this will add a fresh user message and trigger generation)
+        sendMessage(newContent)
+    }
+
     fun sendMessage(text: String) {
         if (_currentSessionId.value == null) createNewSession()
 
@@ -333,6 +365,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isGenerating.value = true
             _streamingContent.value = ""
+            _thinkingContent.value = ""
 
             try {
                 if (!GoosePortHolder.localOnlyMode && acpClient != null) {
@@ -393,6 +426,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isGenerating.value = true
             _streamingContent.value = ""
+            _thinkingContent.value = ""
 
             try {
                 if (!GoosePortHolder.localOnlyMode && acpClient != null) {
@@ -531,10 +565,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             override fun onComplete(fullContent: String) {
                 val finalContent = fullContent.ifBlank { "No response received" }
+                val thinkingText = _thinkingContent.value
                 _messages.value = _messages.value.map { msg ->
-                    if (msg.id == assistantId) msg.copy(content = finalContent) else msg
+                    if (msg.id == assistantId) msg.copy(
+                        content = finalContent,
+                        thinking = thinkingText
+                    ) else msg
                 }
                 _streamingContent.value = ""
+                _thinkingContent.value = ""
                 _isGenerating.value = false
                 viewModelScope.launch {
                     sessionManager.saveCurrentSessionMessages()
@@ -550,6 +589,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 _streamingContent.value = ""
+                _thinkingContent.value = ""
                 _isGenerating.value = false
                 if (current.isBlank()) {
                     addSystemMessage(error)
@@ -568,6 +608,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             override fun onToolCallEnd(name: String, output: String, isError: Boolean) {
                 _toolCalls.value = AcpNotificationHandler.updateToolCallEnd(_toolCalls.value, name, output, isError)
                 updateLastAssistantToolCalls()
+            }
+
+            override fun onThinking(text: String) {
+                _thinkingContent.value = text
             }
         }
     }

@@ -60,6 +60,7 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
         fun onError(error: String)
         fun onToolCallStart(name: String)
         fun onToolCallEnd(name: String, output: String, isError: Boolean)
+        fun onThinking(text: String)
     }
 
     /**
@@ -357,6 +358,7 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
      * Stream from Anthropic Messages API with SSE.
      * Includes activeSystemPrompt as the top-level "system" field.
      * Supports multimodal content (images as base64).
+     * Detects and relays "thinking" content blocks separately.
      */
     private suspend fun streamAnthropic(
         apiKey: String,
@@ -428,6 +430,9 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
             }
 
             val accumulated = StringBuilder()
+            val thinkingAccumulated = StringBuilder()
+            var currentBlockType = "" // Track current content block type ("thinking" or "text")
+
             resp.body?.source()?.let { source ->
                 while (!source.exhausted()) {
                     val line = source.readUtf8Line() ?: break
@@ -440,13 +445,40 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
                         val type = event.optString("type", "")
 
                         when (type) {
+                            "content_block_start" -> {
+                                val contentBlock = event.optJSONObject("content_block")
+                                val blockType = contentBlock?.optString("type", "") ?: ""
+                                currentBlockType = blockType
+                                if (blockType == "thinking") {
+                                    // Start of a thinking block
+                                    val thinkingText = contentBlock?.optString("thinking", "") ?: ""
+                                    if (thinkingText.isNotEmpty()) {
+                                        thinkingAccumulated.append(thinkingText)
+                                        callbacks.onThinking(thinkingAccumulated.toString())
+                                    }
+                                }
+                            }
                             "content_block_delta" -> {
                                 val delta = event.optJSONObject("delta")
-                                val text = delta?.optString("text", "") ?: ""
-                                if (text.isNotEmpty()) {
-                                    accumulated.append(text)
-                                    callbacks.onToken(accumulated.toString())
+                                if (currentBlockType == "thinking") {
+                                    // Thinking delta
+                                    val thinkingText = delta?.optString("thinking", "") ?: ""
+                                    if (thinkingText.isNotEmpty()) {
+                                        thinkingAccumulated.append(thinkingText)
+                                        callbacks.onThinking(thinkingAccumulated.toString())
+                                    }
+                                } else {
+                                    // Regular text delta
+                                    val text = delta?.optString("text", "") ?: ""
+                                    if (text.isNotEmpty()) {
+                                        accumulated.append(text)
+                                        callbacks.onToken(accumulated.toString())
+                                    }
                                 }
+                            }
+                            "content_block_stop" -> {
+                                // Block ended, reset current block type
+                                currentBlockType = ""
                             }
                             "message_stop" -> break
                             "error" -> {
@@ -459,6 +491,11 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
                         Log.w(TAG, "Skipping malformed SSE event: ${data.take(100)}")
                     }
                 }
+            }
+
+            // Emit final thinking content if any was accumulated
+            if (thinkingAccumulated.isNotEmpty()) {
+                callbacks.onThinking(thinkingAccumulated.toString())
             }
 
             callbacks.onComplete(accumulated.toString())

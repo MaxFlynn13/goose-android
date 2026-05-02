@@ -14,7 +14,8 @@ data class ChatMessage(
     val role: MessageRole,
     val content: String,
     val toolCalls: List<ToolCall> = emptyList(),
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val thinking: String = ""
 )
 
 enum class MessageRole { USER, ASSISTANT, SYSTEM }

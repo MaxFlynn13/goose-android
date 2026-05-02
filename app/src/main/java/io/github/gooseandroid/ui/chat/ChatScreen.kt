@@ -2,10 +2,17 @@ package io.github.gooseandroid.ui.chat
 
 import io.github.gooseandroid.data.models.*
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
@@ -13,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -38,6 +46,7 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
+    val isLoadingSession by viewModel.isLoadingSession.collectAsState()
     val streamingContent by viewModel.streamingContent.collectAsState()
     val toolCalls by viewModel.toolCalls.collectAsState()
     val pendingPrompt by viewModel.pendingPrompt.collectAsState()
@@ -106,52 +115,64 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (messages.isEmpty() && !isGenerating) {
-                // P0: Welcome / empty state
-                WelcomeScreen(
-                    onSuggestionClick = { viewModel.sendMessage(it) },
-                    modifier = Modifier.weight(1f)
-                )
-            } else {
-                // Messages list with date separators
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    items(itemsWithSeparators, key = { it.key }) { item ->
-                        when (item) {
-                            is ChatItem.DateSeparator -> DateSeparatorRow(item.label)
-                            is ChatItem.Message -> MessageItem(
-                                message = item.message,
-                                onRetry = { viewModel.sendMessage(it) },
-                                onCopy = { text ->
-                                    clipboardManager.setText(AnnotatedString(text))
-                                    scope.launch { snackbarHostState.showSnackbar("Copied to clipboard") }
-                                }
-                            )
+            when {
+                // Feature 1: Loading skeleton while session is loading
+                isLoadingSession -> {
+                    LoadingSkeleton(modifier = Modifier.weight(1f))
+                }
+                messages.isEmpty() && !isGenerating -> {
+                    // P0: Welcome / empty state
+                    WelcomeScreen(
+                        onSuggestionClick = { viewModel.sendMessage(it) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                else -> {
+                    // Messages list with date separators
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(itemsWithSeparators, key = { it.key }) { item ->
+                            when (item) {
+                                is ChatItem.DateSeparator -> DateSeparatorRow(item.label)
+                                is ChatItem.Message -> MessageItem(
+                                    message = item.message,
+                                    onRetry = { viewModel.sendMessage(it) },
+                                    onCopy = { text ->
+                                        clipboardManager.setText(AnnotatedString(text))
+                                        scope.launch { snackbarHostState.showSnackbar("Copied to clipboard") }
+                                    },
+                                    onEdit = { messageId, newContent ->
+                                        viewModel.editAndResend(messageId, newContent)
+                                    }
+                                )
+                            }
                         }
-                    }
 
-                    // Streaming bubble
-                    if (isGenerating && streamingContent.isNotBlank()) {
-                        item(key = "_streaming") {
-                            StreamingBubble(content = streamingContent)
+                        // Streaming bubble
+                        if (isGenerating && streamingContent.isNotBlank()) {
+                            item(key = "_streaming") {
+                                StreamingBubble(content = streamingContent)
+                            }
                         }
-                    }
 
-                    // Running tool calls
-                    val running = toolCalls.filter { it.status == ToolCallStatus.RUNNING }
-                    if (running.isNotEmpty()) {
-                        items(running, key = { "tool_${it.id}" }) { ToolCallCard(it) }
-                    }
+                        // Running tool calls (grouped as a chain)
+                        val running = toolCalls.filter { it.status == ToolCallStatus.RUNNING }
+                        if (running.isNotEmpty()) {
+                            item(key = "_running_tools") {
+                                ToolCallChain(toolCalls = running)
+                            }
+                        }
 
-                    // Typing indicator
-                    if (isGenerating && streamingContent.isBlank()) {
-                        item(key = "_typing") { TypingIndicator() }
+                        // Typing indicator
+                        if (isGenerating && streamingContent.isBlank()) {
+                            item(key = "_typing") { TypingIndicator() }
+                        }
                     }
                 }
             }
@@ -181,6 +202,67 @@ fun ChatScreen(
                     .windowInsetsPadding(WindowInsets.ime)
                     .windowInsetsPadding(WindowInsets.navigationBars)
             )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loading Skeleton (Feature 1: P1 #4)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun LoadingSkeleton(modifier: Modifier = Modifier) {
+    val infiniteTransition = rememberInfiniteTransition(label = "skeleton_shimmer")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.15f,
+        targetValue = 0.35f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "skeleton_alpha"
+    )
+
+    val shimmerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha)
+
+    // Skeleton rows simulating alternating user/assistant messages
+    data class SkeletonRow(val widthFraction: Float, val isUser: Boolean)
+
+    val rows = listOf(
+        SkeletonRow(0.60f, true),    // user bubble placeholder
+        SkeletonRow(0.90f, false),   // assistant placeholder
+        SkeletonRow(0.75f, false),   // assistant placeholder
+        SkeletonRow(0.50f, true),    // user bubble placeholder
+        SkeletonRow(0.85f, false),   // assistant placeholder
+        SkeletonRow(0.65f, false)    // assistant placeholder
+    )
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        rows.forEach { row ->
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = if (row.isUser) Alignment.CenterEnd else Alignment.CenterStart
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(row.widthFraction)
+                        .height(if (row.isUser) 40.dp else 52.dp)
+                        .clip(
+                            RoundedCornerShape(
+                                topStart = 16.dp,
+                                topEnd = 16.dp,
+                                bottomStart = if (row.isUser) 16.dp else 4.dp,
+                                bottomEnd = if (row.isUser) 4.dp else 16.dp
+                            )
+                        )
+                        .background(shimmerColor)
+                )
+            }
         }
     }
 }
@@ -361,11 +443,17 @@ private fun ProviderModelChip() {
 private fun MessageItem(
     message: ChatMessage,
     onRetry: (String) -> Unit,
-    onCopy: (String) -> Unit
+    onCopy: (String) -> Unit,
+    onEdit: (String, String) -> Unit = { _, _ -> }
 ) {
     Column {
         when (message.role) {
-            MessageRole.USER -> UserBubble(message = message, onRetry = onRetry, onDelete = {})
+            MessageRole.USER -> UserBubble(
+                message = message,
+                onRetry = onRetry,
+                onDelete = {},
+                onEdit = onEdit
+            )
             MessageRole.ASSISTANT -> AssistantBubble(message = message, onDelete = {})
             MessageRole.SYSTEM -> SystemBubble(message = message)
         }
