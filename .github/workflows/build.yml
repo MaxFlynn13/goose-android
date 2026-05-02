@@ -291,23 +291,37 @@ jobs:
           # === Patch 4: goose-cli update.rs asset_name() ===
           # The asset_name() function has cfg branches for mac/linux/windows
           # but not Android, causing a "returns ()" error.
-          # Add an Android fallback.
+          # Replace the entire function with one that includes Android.
           UPDATE_RS="crates/goose-cli/src/commands/update.rs"
           if [ -f "$UPDATE_RS" ]; then
             echo "Patching goose-cli update.rs for Android"
-            # Insert an Android cfg block before the closing brace of asset_name()
-            # Find the line with the last closing brace of asset_name (after windows block)
-            sed -i '/^    #\[cfg(all(target_os = "windows".*not(feature = "cuda")))\]/,/^    }/ {
-              /^    }/ a\
-    #[cfg(target_os = "android")]\
-    {\
-        "goose-aarch64-linux-android"\
-    }\
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows", target_os = "android")))]\
-    {\
-        "goose-unknown"\
-    }
-            }' "$UPDATE_RS"
+            python3 -c "
+          import re
+          with open('$UPDATE_RS', 'r') as f:
+              content = f.read()
+          # Replace the asset_name function entirely
+          new_fn = '''fn asset_name() -> &'static str {
+              #[cfg(all(target_os = \"macos\", target_arch = \"aarch64\"))]
+              { \"goose-aarch64-apple-darwin.tar.bz2\" }
+              #[cfg(all(target_os = \"macos\", target_arch = \"x86_64\"))]
+              { \"goose-x86_64-apple-darwin.tar.bz2\" }
+              #[cfg(all(target_os = \"linux\", target_arch = \"x86_64\"))]
+              { \"goose-x86_64-unknown-linux-gnu.tar.bz2\" }
+              #[cfg(all(target_os = \"linux\", target_arch = \"aarch64\"))]
+              { \"goose-aarch64-unknown-linux-gnu.tar.bz2\" }
+              #[cfg(target_os = \"windows\")]
+              { \"goose-x86_64-pc-windows-msvc.zip\" }
+              #[cfg(target_os = \"android\")]
+              { \"goose-aarch64-linux-android\" }
+              #[cfg(not(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\", target_os = \"android\")))]
+              { \"goose-unknown\" }
+          }'''
+          # Match from 'fn asset_name' to the next function or closing brace pattern
+          pattern = r'fn asset_name\(\)[^{]*\{[^}]*(?:\{[^}]*\}[^}]*)*\}'
+          content = re.sub(pattern, new_fn, content, count=1)
+          with open('$UPDATE_RS', 'w') as f:
+              f.write(content)
+          "
             echo "update.rs patched"
           fi
 
