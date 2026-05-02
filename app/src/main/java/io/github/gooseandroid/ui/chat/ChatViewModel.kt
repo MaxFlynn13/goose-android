@@ -66,7 +66,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             launch {
                 client.notifications.collect { notification ->
-                    handleNotification(notification)
+                    handleAcpNotification(notification)
                 }
             }
 
@@ -300,16 +300,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelGeneration() {
         viewModelScope.launch {
-            acpClient?.cancelCurrentRequest()
+            acpClient?.cancel()
             _isGenerating.value = false
         }
     }
 
-    private fun handleNotification(notification: Map<String, Any?>) {
-        val method = notification["method"] as? String ?: return
-        when (method) {
+    private fun handleAcpNotification(notification: io.github.gooseandroid.acp.AcpNotification) {
+        when (notification.method) {
             "notifications/message" -> {
-                val content = notification["content"] as? String ?: return
+                val content = notification.params["content"]?.toString()?.removeSurrounding("\"") ?: return
                 val msg = ChatMessage(
                     id = UUID.randomUUID().toString(),
                     role = MessageRole.ASSISTANT,
