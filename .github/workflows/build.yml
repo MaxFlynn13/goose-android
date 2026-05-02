@@ -398,6 +398,16 @@ jobs:
           name: goose-binary-arm64
           path: app/src/main/jniLibs/arm64-v8a/
 
+      - name: Bundle BusyBox for runtime tools
+        run: |
+          mkdir -p app/src/main/assets
+          wget -q "https://busybox.net/downloads/binaries/1.35.0-arm64-linux-musl/busybox" \
+            -O app/src/main/assets/busybox-arm64 || \
+          wget -q "https://github.com/nicoulaj/busybox-static/releases/download/1.36.1/busybox-arm64" \
+            -O app/src/main/assets/busybox-arm64 || \
+          echo "BusyBox download failed — runtime tools will be unavailable"
+          [ -f app/src/main/assets/busybox-arm64 ] && chmod +x app/src/main/assets/busybox-arm64
+
       - name: Build debug APK
         run: gradle assembleDebug
 

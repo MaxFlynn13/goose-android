@@ -32,9 +32,11 @@ private val MODULES = listOf(
     PanelModule("Agents", Icons.Default.Face, "agents"),
     PanelModule("Projects", Icons.Default.Folder, "projects"),
     PanelModule("Skills", Icons.Default.AutoAwesome, "skills"),
+    PanelModule("Workspace", Icons.Default.Storage, "workspace"),
     PanelModule("Brain", Icons.Default.Psychology, "brain"),
     PanelModule("Extensions", Icons.Default.Extension, "extensions"),
     PanelModule("Models", Icons.Default.Memory, "models"),
+    PanelModule("Logs", Icons.Default.Terminal, "logs"),
     PanelModule("Doctor", Icons.Default.HealthAndSafety, "doctor"),
     PanelModule("Settings", Icons.Default.Settings, "settings"),
 )

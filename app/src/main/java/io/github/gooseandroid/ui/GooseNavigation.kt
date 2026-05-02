@@ -22,6 +22,8 @@ import io.github.gooseandroid.ui.brain.BrainScreen
 import io.github.gooseandroid.ui.chat.ChatScreen
 import io.github.gooseandroid.ui.chat.ChatViewModel
 import io.github.gooseandroid.ui.doctor.DoctorScreen
+import io.github.gooseandroid.ui.doctor.LogViewerScreen
+import io.github.gooseandroid.ui.workspace.WorkspaceScreen
 import io.github.gooseandroid.ui.extensions.ExtensionsScreen
 import io.github.gooseandroid.ui.history.HistoryScreen
 import io.github.gooseandroid.ui.models.ModelsScreen
@@ -131,6 +133,8 @@ fun GooseNavigation(sharedText: String? = null) {
                 )
             }
             composable("doctor") { DoctorScreen(onBack = { navController.popBackStack() }) }
+            composable("logs") { LogViewerScreen(onBack = { navController.popBackStack() }) }
+            composable("workspace") { WorkspaceScreen(onBack = { navController.popBackStack() }) }
         }
 
         // Scrim

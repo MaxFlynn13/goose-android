@@ -80,6 +80,13 @@ class GooseService : Service() {
 
     private suspend fun startGoose() {
         try {
+            // Initialize runtime tools (BusyBox, Git) if not already done
+            val runtimeManager = io.github.gooseandroid.runtime.RuntimeManager(this)
+            if (!runtimeManager.isInitialized()) {
+                Log.i(TAG, "Initializing runtime tools...")
+                runtimeManager.initialize()
+            }
+
             port = findFreePort()
             Log.i(TAG, "Starting goose on port $port")
 
@@ -118,16 +125,31 @@ class GooseService : Service() {
 
             gooseProcess = processBuilder.start()
 
-            // Log stderr in background with proper error handling (#3)
+            // Capture stdout for log viewer
+            scope.launch {
+                try {
+                    gooseProcess?.inputStream?.bufferedReader()?.useLines { lines ->
+                        lines.forEach { line ->
+                            Log.d(TAG, "[goose] $line")
+                            io.github.gooseandroid.ui.doctor.LogCollector.addLine(line)
+                        }
+                    }
+                } catch (e: IOException) {
+                    Log.w(TAG, "Error reading goose stdout", e)
+                }
+            }
+
+            // Capture stderr for log viewer
             scope.launch {
                 try {
                     gooseProcess?.errorStream?.bufferedReader()?.useLines { lines ->
                         lines.forEach { line ->
                             Log.d(TAG, "[goose stderr] $line")
+                            io.github.gooseandroid.ui.doctor.LogCollector.addLine("[ERR] $line")
                         }
                     }
                 } catch (e: IOException) {
-                    Log.w(TAG, "Error reading goose stderr stream", e)
+                    Log.w(TAG, "Error reading goose stderr", e)
                 }
             }
 
@@ -204,17 +226,24 @@ class GooseService : Service() {
     private fun buildEnvironment(homeDir: File): Map<String, String> {
         val env = mutableMapOf<String, String>()
 
-        env["HOME"] = homeDir.absolutePath
+        // Set HOME to workspace so goose operates in the sandboxed filesystem
+        val workspaceDir = File(filesDir, "workspace")
+        workspaceDir.mkdirs()
+        env["HOME"] = workspaceDir.absolutePath
         env["GOOSE_DISABLE_KEYRING"] = "true"
         env["GOOSE_SHELL"] = "/system/bin/sh"
         env["TMPDIR"] = cacheDir.absolutePath
-        env["XDG_CONFIG_HOME"] = File(homeDir, ".config").absolutePath
-        env["XDG_DATA_HOME"] = File(homeDir, ".local/share").absolutePath
+        env["XDG_CONFIG_HOME"] = File(workspaceDir, ".config").apply { mkdirs() }.absolutePath
+        env["XDG_DATA_HOME"] = File(workspaceDir, ".local/share").apply { mkdirs() }.absolutePath
 
-        // PATH: include our bundled binaries + system
-        val binDir = File(filesDir, "bin")
-        binDir.mkdirs()
-        env["PATH"] = "${binDir.absolutePath}:/system/bin:/system/xbin"
+        // PATH: runtime tools (busybox, git) + system binaries
+        val runtimeManager = io.github.gooseandroid.runtime.RuntimeManager(this)
+        val runtimeBin = runtimeManager.getRuntimePath()
+        env["PATH"] = "$runtimeBin:/system/bin:/system/xbin"
+
+        // Git config
+        env["GIT_EXEC_PATH"] = runtimeBin
+        env["GIT_TEMPLATE_DIR"] = File(workspaceDir, ".git-templates").apply { mkdirs() }.absolutePath
 
         return env
     }

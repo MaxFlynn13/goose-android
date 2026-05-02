@@ -39,6 +39,18 @@ jobs:
           # Minimal ELF header so APK packaging doesn't complain
           printf '\x7fELF' > app/src/main/jniLibs/arm64-v8a/libgoose.so
 
+      - name: Bundle BusyBox for runtime tools
+        run: |
+          mkdir -p app/src/main/assets
+          # Download static BusyBox for arm64
+          wget -q "https://busybox.net/downloads/binaries/1.35.0-arm64-linux-musl/busybox" \
+            -O app/src/main/assets/busybox-arm64 || \
+          wget -q "https://github.com/nicoulaj/busybox-static/releases/download/1.36.1/busybox-arm64" \
+            -O app/src/main/assets/busybox-arm64 || \
+          echo "BusyBox download failed — will work without runtime tools"
+          # Make it executable in the asset (metadata only, actual chmod happens at runtime)
+          [ -f app/src/main/assets/busybox-arm64 ] && chmod +x app/src/main/assets/busybox-arm64
+
       - name: Build debug APK
         run: gradle assembleDebug
 
