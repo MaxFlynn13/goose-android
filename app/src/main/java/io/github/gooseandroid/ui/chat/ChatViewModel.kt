@@ -191,14 +191,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     Log.i(TAG, "ACP Session created: $sessionId")
                 }.onFailure { error ->
                     Log.e(TAG, "Failed to create ACP session", error)
-                    addSystemMessage("Failed to create session: ${error.message}")
+                    // ACP session failed — null out client so cloud fallback is used
+                    acpClient = null
+                    client.disconnect()
+                    addSystemMessage("Goose backend session failed. Using direct cloud API instead.")
                 }
             }.onFailure { error ->
-                Log.e(TAG, "Failed to connect to goose", error)
+                Log.e(TAG, "Failed to connect to goose backend", error)
+                // Connection failed — null out client so cloud fallback is used
+                acpClient = null
                 if (_sessions.value.isEmpty()) createNewSession()
                 addSystemMessage(
-                    "Unable to connect to Goose backend: ${error.message}\n\n" +
-                    "Go to Settings to configure a provider."
+                    "Goose backend not available. Using direct cloud API.\n\n" +
+                    "Configure your API key in Settings to chat."
                 )
             }
         }
@@ -380,8 +385,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.value = _messages.value + userMsg
         sessionManager.generateAutoTitle(text)
 
+        // Cancel previous job
         streamingJob?.cancel()
         streamingJob = viewModelScope.launch {
+            // Wait for the old job's finally block to complete before we set isGenerating=true
+            // This prevents the race where old finally{isGenerating=false} runs after new isGenerating=true
+            kotlinx.coroutines.yield()
             _isGenerating.value = true
             _streamingContent.value = ""
             _thinkingContent.value = ""
@@ -489,6 +498,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         streamingJob?.cancel()
         streamingJob = viewModelScope.launch {
+            kotlinx.coroutines.yield()
             _isGenerating.value = true
             _streamingContent.value = ""
             _thinkingContent.value = ""

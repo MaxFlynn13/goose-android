@@ -51,10 +51,21 @@ fun ChatScreen(
     val toolCalls by viewModel.toolCalls.collectAsState()
     val pendingPrompt by viewModel.pendingPrompt.collectAsState()
     val currentSessionTitle by viewModel.currentSessionTitle.collectAsState()
+    val lastError by viewModel.lastError.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboardManager = LocalClipboardManager.current
+
+    // Show errors as snackbar
+    LaunchedEffect(lastError) {
+        lastError?.let { error ->
+            snackbarHostState.showSnackbar(
+                message = error.take(100),
+                duration = SnackbarDuration.Long
+            )
+        }
+    }
 
     // Smart scroll: only auto-scroll when user is near the bottom
     val isNearBottom by remember {
