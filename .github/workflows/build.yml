@@ -288,6 +288,29 @@ jobs:
             echo "Platform mod.rs replaced with Android-compatible version"
           fi
 
+          # === Patch 4: goose-cli update.rs asset_name() ===
+          # The asset_name() function has cfg branches for mac/linux/windows
+          # but not Android, causing a "returns ()" error.
+          # Add an Android fallback.
+          UPDATE_RS="crates/goose-cli/src/commands/update.rs"
+          if [ -f "$UPDATE_RS" ]; then
+            echo "Patching goose-cli update.rs for Android"
+            # Insert an Android cfg block before the closing brace of asset_name()
+            # Find the line with the last closing brace of asset_name (after windows block)
+            sed -i '/^    #\[cfg(all(target_os = "windows".*not(feature = "cuda")))\]/,/^    }/ {
+              /^    }/ a\
+    #[cfg(target_os = "android")]\
+    {\
+        "goose-aarch64-linux-android"\
+    }\
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows", target_os = "android")))]\
+    {\
+        "goose-unknown"\
+    }
+            }' "$UPDATE_RS"
+            echo "update.rs patched"
+          fi
+
           # Build with minimal features for Android
           # - rustls-tls: pure Rust TLS (no OpenSSL needed)
           # - telemetry: basic telemetry
