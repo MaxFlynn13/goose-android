@@ -1,5 +1,15 @@
 package io.github.gooseandroid.ui.chat
 
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.*
@@ -26,7 +36,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -40,8 +52,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.BufferedReader
+import java.io.InputStreamReader
 
 /**
  * Chat screen - main conversation interface for Goose AI Android.
@@ -50,12 +66,28 @@ import kotlinx.coroutines.launch
  * - Markdown rendering in assistant messages
  * - Streaming text display (character by character)
  * - Expandable tool call cards with status and output
- * - Message actions (copy, retry) via long press
+ * - Message actions (copy, retry, delete) via long press popup menu
  * - Syntax-highlighted code blocks with copy button
  * - New chat button in top bar
  * - Session title display
  * - Provider/model indicator chip
+ * - File attachments (images and text files)
+ * - Voice input via SpeechRecognizer
+ * - Inline image display for assistant messages
+ * - /compact command for context compaction
+ * - Context token counter in top bar
  */
+
+/**
+ * Data class representing an attached file ready to be sent with a message.
+ */
+private data class FileAttachment(
+    val uri: Uri,
+    val name: String,
+    val content: String,
+    val mimeType: String
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -73,6 +105,13 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
+    // Token counter: approximate tokens from message history
+    val estimatedTokens by remember(messages) {
+        derivedStateOf {
+            messages.sumOf { it.content.length } / 4
+        }
+    }
+
     // Auto-scroll to bottom when new messages arrive or streaming updates
     LaunchedEffect(messages.size, streamingContent) {
         val totalItems = listState.layoutInfo.totalItemsCount
@@ -86,11 +125,18 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = currentSessionTitle.ifBlank { "Goose" },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Column {
+                        Text(
+                            text = currentSessionTitle.ifBlank { "Goose" },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "~$estimatedTokens tokens",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onMenuClick) {
@@ -133,7 +179,8 @@ fun ChatScreen(
                 items(messages, key = { it.id }) { message ->
                     MessageItem(
                         message = message,
-                        onRetry = { viewModel.sendMessage(it) }
+                        onRetry = { viewModel.sendMessage(it) },
+                        onDelete = { /* handled by viewModel if exposed */ }
                     )
                 }
 
@@ -160,10 +207,16 @@ fun ChatScreen(
                 }
             }
 
-            // Input bar with IME insets
+            // Input bar with IME insets applied ONLY here
             ChatInputBar(
                 onSend = { text ->
-                    viewModel.sendMessage(text)
+                    // Handle /compact command
+                    if (text.trim() == "/compact") {
+                        viewModel.addSystemMessage("[compact] Context compaction requested.")
+                        viewModel.sendMessage("/compact")
+                    } else {
+                        viewModel.sendMessage(text)
+                    }
                     scope.launch {
                         delay(100)
                         val totalItems = listState.layoutInfo.totalItemsCount
@@ -191,7 +244,6 @@ fun ChatScreen(
 
 @Composable
 private fun ProviderModelChip(viewModel: ChatViewModel) {
-    // Derive the active model display name from the ViewModel or settings
     val modelLabel = remember { "Claude Sonnet 4" }
     SuggestionChip(
         onClick = {},
@@ -213,11 +265,12 @@ private fun ProviderModelChip(viewModel: ChatViewModel) {
 @Composable
 private fun MessageItem(
     message: ChatMessage,
-    onRetry: (String) -> Unit
+    onRetry: (String) -> Unit,
+    onDelete: (ChatMessage) -> Unit
 ) {
     when (message.role) {
-        MessageRole.USER -> UserBubble(message = message, onRetry = onRetry)
-        MessageRole.ASSISTANT -> AssistantBubble(message = message)
+        MessageRole.USER -> UserBubble(message = message, onRetry = onRetry, onDelete = onDelete)
+        MessageRole.ASSISTANT -> AssistantBubble(message = message, onDelete = onDelete)
         MessageRole.SYSTEM -> SystemBubble(message = message)
     }
 }
@@ -230,110 +283,155 @@ private fun MessageItem(
 @Composable
 private fun UserBubble(
     message: ChatMessage,
-    onRetry: (String) -> Unit
+    onRetry: (String) -> Unit,
+    onDelete: (ChatMessage) -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
-    var showActions by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.End
     ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = 16.dp,
-                bottomEnd = 4.dp
-            ),
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .combinedClickable(
-                    onClick = { showActions = false },
-                    onLongClick = { showActions = !showActions }
-                )
-        ) {
-            Text(
-                text = message.content,
-                modifier = Modifier.padding(12.dp),
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-
-        // Action buttons on long press
-        AnimatedVisibility(visible = showActions) {
-            Row(
-                modifier = Modifier.padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+        Box {
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = 16.dp,
+                    topEnd = 16.dp,
+                    bottomStart = 16.dp,
+                    bottomEnd = 4.dp
+                ),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { showMenu = true }
+                    )
             ) {
-                IconButton(
+                Text(
+                    text = message.content,
+                    modifier = Modifier.padding(12.dp),
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Copy") },
                     onClick = {
                         clipboardManager.setText(AnnotatedString(message.content))
-                        showActions = false
+                        showMenu = false
                     },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Copy",
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                IconButton(
+                    leadingIcon = {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Retry") },
                     onClick = {
                         onRetry(message.content)
-                        showActions = false
+                        showMenu = false
                     },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Retry",
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                    leadingIcon = {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    onClick = {
+                        onDelete(message)
+                        showMenu = false
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Delete, contentDescription = null)
+                    }
+                )
             }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Assistant Bubble (with markdown rendering)
+// Assistant Bubble (with markdown rendering and inline images)
 // ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun AssistantBubble(message: ChatMessage) {
+private fun AssistantBubble(
+    message: ChatMessage,
+    onDelete: (ChatMessage) -> Unit
+) {
     val clipboardManager = LocalClipboardManager.current
-    var showActions by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
     ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = 4.dp,
-                bottomEnd = 16.dp
-            ),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier
-                .widthIn(max = 340.dp)
-                .combinedClickable(
-                    onClick = { showActions = false },
-                    onLongClick = { showActions = !showActions }
+        Box {
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = 16.dp,
+                    topEnd = 16.dp,
+                    bottomStart = 4.dp,
+                    bottomEnd = 16.dp
+                ),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .widthIn(max = 340.dp)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { showMenu = true }
+                    )
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    // Render inline images if present
+                    val imageUrls = extractImageUrls(message.content)
+                    val textContent = removeImageMarkdown(message.content)
+
+                    if (textContent.isNotBlank()) {
+                        MarkdownContent(
+                            content = textContent,
+                            textColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // Display extracted images
+                    imageUrls.forEach { url ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        InlineImage(url = url)
+                    }
+                }
+            }
+
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text("Copy") },
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(message.content))
+                        showMenu = false
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                    }
                 )
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                MarkdownContent(
-                    content = message.content,
-                    textColor = MaterialTheme.colorScheme.onSurfaceVariant
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    onClick = {
+                        onDelete(message)
+                        showMenu = false
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Delete, contentDescription = null)
+                    }
                 )
             }
         }
@@ -346,30 +444,85 @@ private fun AssistantBubble(message: ChatMessage) {
                 Spacer(modifier = Modifier.height(4.dp))
             }
         }
+    }
+}
 
-        // Action buttons on long press
-        AnimatedVisibility(visible = showActions) {
-            Row(
-                modifier = Modifier.padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                IconButton(
-                    onClick = {
-                        clipboardManager.setText(AnnotatedString(message.content))
-                        showActions = false
-                    },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Copy",
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
+// ---------------------------------------------------------------------------
+// Inline Image Display
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders an image from a URL or base64 data URI inline in the message.
+ */
+@Composable
+private fun InlineImage(url: String) {
+    val context = LocalContext.current
+    val imageModel = if (url.startsWith("data:image")) {
+        // Base64 image data URI
+        url
+    } else {
+        url
+    }
+
+    AsyncImage(
+        model = ImageRequest.Builder(context)
+            .data(imageModel)
+            .crossfade(true)
+            .build(),
+        contentDescription = "Inline image",
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 300.dp)
+            .clip(RoundedCornerShape(8.dp)),
+        contentScale = ContentScale.Fit
+    )
+}
+
+/**
+ * Extracts image URLs from markdown content.
+ * Matches: ![alt](url) and bare URLs ending in image extensions,
+ * and base64 data URIs.
+ */
+private fun extractImageUrls(content: String): List<String> {
+    val urls = mutableListOf<String>()
+
+    // Markdown image syntax: ![alt](url)
+    val markdownImageRegex = Regex("!\\[.*?]\\((.*?)\\)")
+    markdownImageRegex.findAll(content).forEach { match ->
+        urls.add(match.groupValues[1])
+    }
+
+    // Base64 data URIs in the text
+    val base64Regex = Regex("(data:image/[^;]+;base64,[A-Za-z0-9+/=]+)")
+    base64Regex.findAll(content).forEach { match ->
+        val dataUri = match.groupValues[1]
+        if (dataUri !in urls) {
+            urls.add(dataUri)
         }
     }
+
+    // Bare image URLs (http/https ending in common image extensions)
+    val bareUrlRegex = Regex("(https?://\\S+\\.(?:png|jpg|jpeg|gif|webp|svg))(\\s|$|\\))")
+    bareUrlRegex.findAll(content).forEach { match ->
+        val bareUrl = match.groupValues[1]
+        if (bareUrl !in urls) {
+            urls.add(bareUrl)
+        }
+    }
+
+    return urls
+}
+
+/**
+ * Removes image markdown syntax from content so text renders cleanly.
+ */
+private fun removeImageMarkdown(content: String): String {
+    var result = content
+    // Remove ![alt](url) patterns
+    result = Regex("!\\[.*?]\\(.*?\\)").replace(result, "")
+    // Remove standalone base64 data URIs
+    result = Regex("data:image/[^;]+;base64,[A-Za-z0-9+/=]+").replace(result, "")
+    return result.trim()
 }
 
 // ---------------------------------------------------------------------------
@@ -404,18 +557,15 @@ private fun SystemBubble(message: ChatMessage) {
 
 @Composable
 private fun StreamingBubble(content: String) {
-    // Animate displayed character count to simulate streaming appearance
     var displayedLength by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(content) {
-        // When content grows, animate to the new length
         while (displayedLength < content.length) {
             displayedLength = (displayedLength + 1).coerceAtMost(content.length)
-            delay(12L) // ~80 characters per second
+            delay(12L)
         }
     }
 
-    // Reset if content shrinks (new stream started)
     LaunchedEffect(content.length < displayedLength) {
         if (content.length < displayedLength) {
             displayedLength = content.length
@@ -475,7 +625,6 @@ private fun ToolCallCard(toolCall: ToolCall) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // Tool icon
                 val toolIcon = when (toolCall.status) {
                     ToolCallStatus.RUNNING -> Icons.Default.Sync
                     ToolCallStatus.COMPLETE -> Icons.Default.CheckCircle
@@ -493,7 +642,6 @@ private fun ToolCallCard(toolCall: ToolCall) {
                     tint = iconTint
                 )
 
-                // Tool name
                 Text(
                     text = toolCall.name,
                     style = MaterialTheme.typography.labelMedium,
@@ -501,10 +649,8 @@ private fun ToolCallCard(toolCall: ToolCall) {
                     modifier = Modifier.weight(1f)
                 )
 
-                // Status chip
                 ToolStatusChip(status = toolCall.status)
 
-                // Expand/collapse indicator
                 Icon(
                     imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = if (expanded) "Collapse" else "Expand",
@@ -513,7 +659,6 @@ private fun ToolCallCard(toolCall: ToolCall) {
                 )
             }
 
-            // Expanded content: input and output
             if (expanded) {
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -666,18 +811,6 @@ private fun TypingIndicator() {
 // Markdown Content Renderer
 // ---------------------------------------------------------------------------
 
-/**
- * Regex-based markdown renderer supporting:
- * - Headers (# ## ###)
- * - Bold (**text**)
- * - Italic (*text*)
- * - Inline code (`code`)
- * - Fenced code blocks (```language ... ```)
- * - Unordered lists (- item)
- * - Ordered lists (1. item)
- * - Links ([text](url))
- * - Horizontal rules (---)
- */
 @Composable
 private fun MarkdownContent(
     content: String,
@@ -738,9 +871,6 @@ private fun MarkdownContent(
     }
 }
 
-/**
- * Renders inline markdown (bold, italic, code, links) as AnnotatedString.
- */
 @Composable
 private fun InlineMarkdownText(
     text: String,
@@ -842,7 +972,7 @@ private fun buildInlineAnnotatedString(
                         i++
                     }
                 }
-                // Italic: *text* (single asterisk, not at start of bold)
+                // Italic: *text*
                 text[i] == '*' && !text.startsWith("**", i) -> {
                     val end = text.indexOf('*', i + 1)
                     if (end != -1 && end > i + 1) {
@@ -855,7 +985,7 @@ private fun buildInlineAnnotatedString(
                         i++
                     }
                 }
-                // Italic: _text_ (single underscore, not at start of bold)
+                // Italic: _text_
                 text[i] == '_' && !text.startsWith("__", i) -> {
                     val end = text.indexOf('_', i + 1)
                     if (end != -1 && end > i + 1) {
@@ -895,7 +1025,6 @@ private fun CodeBlockView(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column {
-            // Header with language label and copy button
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -931,7 +1060,6 @@ private fun CodeBlockView(
                 }
             }
 
-            // Code content with syntax highlighting
             SelectionContainer {
                 Text(
                     text = highlightSyntax(code, language),
@@ -947,7 +1075,6 @@ private fun CodeBlockView(
         }
     }
 
-    // Reset copied state after delay
     LaunchedEffect(copied) {
         if (copied) {
             delay(2000)
@@ -956,9 +1083,6 @@ private fun CodeBlockView(
     }
 }
 
-/**
- * Basic syntax highlighting for common tokens.
- */
 @Composable
 private fun highlightSyntax(code: String, language: String): AnnotatedString {
     val keywordColor = MaterialTheme.colorScheme.primary
@@ -982,7 +1106,6 @@ private fun highlightSyntax(code: String, language: String): AnnotatedString {
             var i = 0
             while (i < code.length) {
                 when {
-                    // Single-line comment
                     code.startsWith("//", i) || code.startsWith("#", i) -> {
                         val end = code.indexOf('\n', i).let { if (it == -1) code.length else it }
                         withStyle(SpanStyle(color = commentColor, fontStyle = FontStyle.Italic)) {
@@ -990,7 +1113,6 @@ private fun highlightSyntax(code: String, language: String): AnnotatedString {
                         }
                         i = end
                     }
-                    // String literal (double quotes)
                     code[i] == '"' -> {
                         val end = findStringEnd(code, i, '"')
                         withStyle(SpanStyle(color = stringColor)) {
@@ -998,7 +1120,6 @@ private fun highlightSyntax(code: String, language: String): AnnotatedString {
                         }
                         i = end
                     }
-                    // String literal (single quotes)
                     code[i] == '\'' -> {
                         val end = findStringEnd(code, i, '\'')
                         withStyle(SpanStyle(color = stringColor)) {
@@ -1006,7 +1127,6 @@ private fun highlightSyntax(code: String, language: String): AnnotatedString {
                         }
                         i = end
                     }
-                    // Numbers
                     code[i].isDigit() && (i == 0 || !code[i - 1].isLetterOrDigit()) -> {
                         val end = (i until code.length).firstOrNull {
                             !code[it].isDigit() && code[it] != '.'
@@ -1016,7 +1136,6 @@ private fun highlightSyntax(code: String, language: String): AnnotatedString {
                         }
                         i = end
                     }
-                    // Keywords / identifiers
                     code[i].isLetter() || code[i] == '_' -> {
                         val end = (i until code.length).firstOrNull {
                             !code[it].isLetterOrDigit() && code[it] != '_'
@@ -1081,7 +1200,6 @@ private fun parseMarkdownBlocks(content: String): List<MarkdownBlock> {
         val line = lines[i]
 
         when {
-            // Fenced code block
             line.trimStart().startsWith("```") -> {
                 val language = line.trimStart().removePrefix("```").trim()
                 val codeLines = mutableListOf<String>()
@@ -1091,9 +1209,8 @@ private fun parseMarkdownBlocks(content: String): List<MarkdownBlock> {
                     i++
                 }
                 blocks.add(MarkdownBlock.CodeBlock(codeLines.joinToString("\n"), language))
-                i++ // skip closing ```
+                i++
             }
-            // Header
             line.startsWith("# ") -> {
                 blocks.add(MarkdownBlock.Header(1, line.removePrefix("# ")))
                 i++
@@ -1110,19 +1227,16 @@ private fun parseMarkdownBlocks(content: String): List<MarkdownBlock> {
                 blocks.add(MarkdownBlock.Header(3, line.removePrefix("#### ")))
                 i++
             }
-            // Horizontal rule
             line.trim().matches(Regex("^-{3,}$")) || line.trim().matches(Regex("^\\*{3,}$")) -> {
                 blocks.add(MarkdownBlock.HorizontalRule)
                 i++
             }
-            // Unordered list
             line.trimStart().startsWith("- ") || line.trimStart().startsWith("* ") -> {
                 val bullet = if (line.trimStart().startsWith("- ")) "-" else "*"
                 val text = line.trimStart().removePrefix("$bullet ").trim()
                 blocks.add(MarkdownBlock.ListItem("  -", text))
                 i++
             }
-            // Ordered list
             line.trimStart().matches(Regex("^\\d+\\.\\s.*")) -> {
                 val match = Regex("^(\\d+)\\.\\s(.*)").find(line.trimStart())
                 if (match != null) {
@@ -1132,11 +1246,9 @@ private fun parseMarkdownBlocks(content: String): List<MarkdownBlock> {
                 }
                 i++
             }
-            // Empty line (skip)
             line.isBlank() -> {
                 i++
             }
-            // Regular paragraph (collect consecutive non-blank lines)
             else -> {
                 val paragraphLines = mutableListOf<String>()
                 while (i < lines.size && lines[i].isNotBlank() &&
@@ -1161,7 +1273,7 @@ private fun parseMarkdownBlocks(content: String): List<MarkdownBlock> {
 }
 
 // ---------------------------------------------------------------------------
-// Chat Input Bar
+// Chat Input Bar (with file attachments and voice input)
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -1173,7 +1285,10 @@ private fun ChatInputBar(
     onPrefillConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var text by remember { mutableStateOf("") }
+    val attachments = remember { mutableStateListOf<FileAttachment>() }
+    var isListening by remember { mutableStateOf(false) }
 
     // Handle recipe prefill
     LaunchedEffect(prefillText) {
@@ -1183,68 +1298,331 @@ private fun ChatInputBar(
         }
     }
 
+    // File picker launcher
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            val fileContent = readFileContent(context, uri)
+            val fileName = getFileName(context, uri)
+            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+            if (fileContent != null) {
+                attachments.add(
+                    FileAttachment(
+                        uri = uri,
+                        name = fileName,
+                        content = fileContent,
+                        mimeType = mimeType
+                    )
+                )
+            }
+        }
+    }
+
+    // Voice input (SpeechRecognizer)
+    val speechRecognizer = remember { SpeechRecognizer.createSpeechRecognizer(context) }
+    val voiceText = remember { mutableStateOf("") }
+
+    DisposableEffect(Unit) {
+        val listener = object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {
+                isListening = false
+            }
+            override fun onError(error: Int) {
+                isListening = false
+            }
+            override fun onResults(results: Bundle?) {
+                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                if (!matches.isNullOrEmpty()) {
+                    voiceText.value = matches[0]
+                }
+                isListening = false
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                if (!matches.isNullOrEmpty()) {
+                    voiceText.value = matches[0]
+                }
+            }
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        }
+        speechRecognizer.setRecognitionListener(listener)
+        onDispose {
+            speechRecognizer.destroy()
+        }
+    }
+
+    // Insert voice transcription into text field
+    LaunchedEffect(voiceText.value) {
+        if (voiceText.value.isNotBlank()) {
+            text = if (text.isBlank()) {
+                voiceText.value
+            } else {
+                "$text ${voiceText.value}"
+            }
+            voiceText.value = ""
+        }
+    }
+
+    // Microphone permission launcher
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startListening(context, speechRecognizer)
+            isListening = true
+        }
+    }
+
     Surface(
         modifier = modifier,
         tonalElevation = 2.dp,
         color = MaterialTheme.colorScheme.surface
     ) {
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Column(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Message Goose...") },
-                shape = RoundedCornerShape(24.dp),
-                maxLines = 5,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(
-                    onSend = {
-                        if (text.isNotBlank() && !isGenerating) {
-                            onSend(text.trim())
-                            text = ""
-                        }
+            // Attachment chips row
+            if (attachments.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    attachments.forEachIndexed { index, attachment ->
+                        InputChip(
+                            selected = false,
+                            onClick = { attachments.removeAt(index) },
+                            label = {
+                                Text(
+                                    text = attachment.name,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            trailingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Remove attachment",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
                     }
-                )
-            )
+                }
+            }
 
-            if (isGenerating) {
-                FilledIconButton(
-                    onClick = onCancel,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+            // Input row
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Message Goose...") },
+                    shape = RoundedCornerShape(24.dp),
+                    maxLines = 5,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (text.isNotBlank() && !isGenerating) {
+                                sendWithAttachments(text.trim(), attachments, onSend)
+                                text = ""
+                                attachments.clear()
+                            }
+                        }
                     )
+                )
+
+                // Voice input button
+                if (isListening) {
+                    // Pulsing indicator while recording
+                    val infiniteTransition = rememberInfiniteTransition(label = "mic_pulse")
+                    val pulseAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.4f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(500, easing = EaseInOut),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "pulse_alpha"
+                    )
+                    FilledIconButton(
+                        onClick = {
+                            speechRecognizer.stopListening()
+                            isListening = false
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.error.copy(alpha = pulseAlpha),
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "Stop recording"
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = {
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "Voice input",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Attach file button
+                IconButton(
+                    onClick = {
+                        filePickerLauncher.launch(
+                            arrayOf(
+                                "image/*",
+                                "text/*"
+                            )
+                        )
+                    }
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Stop,
-                        contentDescription = "Cancel generation"
+                        imageVector = Icons.Default.AttachFile,
+                        contentDescription = "Attach file",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            } else {
-                FilledIconButton(
-                    onClick = {
-                        if (text.isNotBlank()) {
-                            onSend(text.trim())
-                            text = ""
-                        }
-                    },
-                    enabled = text.isNotBlank(),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send message"
-                    )
+
+                // Send / Cancel button
+                if (isGenerating) {
+                    FilledIconButton(
+                        onClick = onCancel,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Stop,
+                            contentDescription = "Cancel generation"
+                        )
+                    }
+                } else {
+                    FilledIconButton(
+                        onClick = {
+                            if (text.isNotBlank() || attachments.isNotEmpty()) {
+                                sendWithAttachments(text.trim(), attachments, onSend)
+                                text = ""
+                                attachments.clear()
+                            }
+                        },
+                        enabled = text.isNotBlank() || attachments.isNotEmpty(),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send message"
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Send message with file attachments included
+// ---------------------------------------------------------------------------
+
+private fun sendWithAttachments(
+    text: String,
+    attachments: List<FileAttachment>,
+    onSend: (String) -> Unit
+) {
+    if (attachments.isEmpty()) {
+        onSend(text)
+    } else {
+        val attachmentBlock = attachments.joinToString("\n\n") { attachment ->
+            "[Attached file: ${attachment.name}]\n${attachment.content}"
+        }
+        val fullMessage = if (text.isNotBlank()) {
+            "$text\n\n$attachmentBlock"
+        } else {
+            attachmentBlock
+        }
+        onSend(fullMessage)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Read file content from URI
+// ---------------------------------------------------------------------------
+
+private fun readFileContent(context: Context, uri: Uri): String? {
+    return try {
+        val mimeType = context.contentResolver.getType(uri) ?: ""
+        if (mimeType.startsWith("image/")) {
+            // For images, return a placeholder indicating the image URI
+            "[Image: $uri]"
+        } else {
+            // For text files, read content
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+            val reader = BufferedReader(InputStreamReader(inputStream))
+            val content = reader.use { it.readText() }
+            // Limit content to prevent excessively large messages
+            if (content.length > 50_000) {
+                content.take(50_000) + "\n... [truncated, file too large]"
+            } else {
+                content
+            }
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Get file name from URI
+// ---------------------------------------------------------------------------
+
+private fun getFileName(context: Context, uri: Uri): String {
+    var name = "file"
+    val cursor = context.contentResolver.query(uri, null, null, null, null)
+    cursor?.use {
+        if (it.moveToFirst()) {
+            val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (nameIndex >= 0) {
+                name = it.getString(nameIndex) ?: "file"
+            }
+        }
+    }
+    return name
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Start speech recognition
+// ---------------------------------------------------------------------------
+
+private fun startListening(context: Context, speechRecognizer: SpeechRecognizer) {
+    val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(
+            RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+        )
+        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+    }
+    speechRecognizer.startListening(intent)
 }

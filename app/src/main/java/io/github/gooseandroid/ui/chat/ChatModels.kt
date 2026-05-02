@@ -22,6 +22,13 @@ data class ToolCall(
 
 enum class ToolCallStatus { RUNNING, COMPLETE, ERROR }
 
+data class AttachmentInfo(
+    val name: String,
+    val mimeType: String,
+    val content: String, // text content or base64 for images
+    val isImage: Boolean = false
+)
+
 @Serializable
 data class SessionInfo(
     val id: String,

@@ -38,6 +38,10 @@ class MainActivity : ComponentActivity() {
     private var serviceReady = mutableStateOf(false)
     private var serviceError = mutableStateOf<String?>(null)
 
+    // Shared content from other apps via ShareReceiverActivity
+    var sharedText: String? = null
+        private set
+
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as GooseService.LocalBinder
@@ -57,6 +61,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestNotificationPermission()
+
+        // Check for shared content from other apps
+        sharedText = intent?.getStringExtra("shared_text")
 
         val serviceIntent = Intent(this, GooseService::class.java)
         startForegroundService(serviceIntent)
