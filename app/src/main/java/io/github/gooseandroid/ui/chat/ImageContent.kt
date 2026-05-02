@@ -11,12 +11,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import coil.compose.rememberAsyncImagePainter
+import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -32,7 +32,7 @@ fun InlineImage(
 ) {
     val context = LocalContext.current
 
-    AsyncImage(
+    SubcomposeAsyncImage(
         model = ImageRequest.Builder(context)
             .data(url)
             .crossfade(true)
@@ -51,12 +51,12 @@ fun InlineImage(
                 Icon(Icons.Default.BrokenImage, contentDescription = "Failed to load image")
             }
         },
-        placeholder = {
+        loading = {
             Box(
                 modifier = Modifier.size(48.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Default.Image, contentDescription = "Loading image")
+                CircularProgressIndicator(modifier = Modifier.size(24.dp))
             }
         }
     )

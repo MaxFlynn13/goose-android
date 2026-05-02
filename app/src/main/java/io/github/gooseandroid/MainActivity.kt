@@ -122,10 +122,11 @@ class MainActivity : ComponentActivity() {
         pollServiceReady()
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        intent?.getStringExtra("shared_text")?.let { text ->
+        intent.getStringExtra("shared_text")?.let { text ->
             sharedText = text
         }
     }

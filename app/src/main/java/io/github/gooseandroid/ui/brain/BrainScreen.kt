@@ -34,7 +34,7 @@ fun BrainScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val brainDb = remember { BrainDatabase(context) }
+    val brainDb = remember { BrainDatabase.getInstance(context) }
     val scope = rememberCoroutineScope()
 
     var nodes by remember { mutableStateOf<List<BrainNode>>(emptyList()) }
