@@ -224,21 +224,68 @@ jobs:
           fi
 
           # === Patch 3: goose-mcp computercontroller platform ===
-          # The platform/mod.rs uses cfg(any(linux, android)) for the `pub use`
-          # but the actual linux module is only gated with cfg(linux).
-          # On Android, the use statement tries to import a non-existent module.
-          # Fix: gate the pub use with the same cfg as the module declaration.
+          # Android doesn't have X11/Wayland/display server, so the ComputerController
+          # can't work. We replace the entire platform/mod.rs with a version that
+          # provides a no-op AndroidAutomation on Android.
           PLATFORM_MOD="crates/goose-mcp/src/computercontroller/platform/mod.rs"
           if [ -f "$PLATFORM_MOD" ]; then
             echo "Patching goose-mcp platform module for Android"
-            # Replace the android inclusion in the pub use line
-            # Before: #[cfg(any(target_os = "linux", target_os = "android"))]
-            #         pub use self::linux::LinuxAutomation;
-            # After:  #[cfg(target_os = "linux")]
-            #         pub use self::linux::LinuxAutomation;
-            sed -i 's/#\[cfg(any(target_os = "linux", target_os = "android"))\]/#[cfg(target_os = "linux")]/' "$PLATFORM_MOD"
-            echo "Patched. Current content:"
-            cat "$PLATFORM_MOD"
+            cat > "$PLATFORM_MOD" << 'PLATFORMEOF'
+          #[cfg(target_os = "linux")]
+          mod linux;
+          #[cfg(target_os = "macos")]
+          mod macos;
+          #[cfg(target_os = "windows")]
+          mod windows;
+
+          #[cfg(target_os = "windows")]
+          pub use self::windows::WindowsAutomation;
+          #[cfg(target_os = "macos")]
+          pub use self::macos::MacOSAutomation;
+          #[cfg(target_os = "linux")]
+          pub use self::linux::LinuxAutomation;
+
+          #[allow(dead_code)]
+          pub trait SystemAutomation: Send + Sync {
+              fn execute_system_script(&self, script: &str) -> std::io::Result<String>;
+              fn get_shell_command(&self) -> (&'static str, &'static str);
+              fn get_temp_path(&self) -> std::path::PathBuf;
+              fn has_display(&self) -> bool { true }
+          }
+
+          /// Android stub — no display server available
+          #[cfg(target_os = "android")]
+          pub struct AndroidAutomation;
+
+          #[cfg(target_os = "android")]
+          impl AndroidAutomation {
+              pub fn new() -> Self { AndroidAutomation }
+          }
+
+          #[cfg(target_os = "android")]
+          impl SystemAutomation for AndroidAutomation {
+              fn execute_system_script(&self, _script: &str) -> std::io::Result<String> {
+                  Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "No display server on Android"))
+              }
+              fn get_shell_command(&self) -> (&'static str, &'static str) { ("sh", "-c") }
+              fn get_temp_path(&self) -> std::path::PathBuf { std::path::PathBuf::from("/data/local/tmp") }
+              fn has_display(&self) -> bool { false }
+          }
+
+          pub fn create_system_automation() -> Box<dyn SystemAutomation + Send + Sync> {
+              #[cfg(target_os = "windows")]
+              { Box::new(WindowsAutomation) }
+              #[cfg(target_os = "macos")]
+              { Box::new(MacOSAutomation) }
+              #[cfg(target_os = "linux")]
+              { Box::new(LinuxAutomation::new()) }
+              #[cfg(target_os = "android")]
+              { Box::new(AndroidAutomation::new()) }
+              #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux", target_os = "android")))]
+              { unimplemented!("Unsupported operating system") }
+          }
+          PLATFORMEOF
+            echo "Platform mod.rs replaced with Android-compatible version"
           fi
 
           # Build with minimal features for Android
