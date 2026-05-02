@@ -274,7 +274,7 @@ private fun ModelCard(
             if (!compatibility.meetsRecommended) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "⚠️ Below recommended RAM (${compatibility.totalRamMb}MB / ${compatibility.requiredRamMb}MB rec.) — may be slow",
+                    "Warning: Below recommended RAM (${compatibility.totalRamMb}MB / ${compatibility.requiredRamMb}MB rec.) — may be slow",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary
                 )
@@ -282,7 +282,7 @@ private fun ModelCard(
             if (!compatibility.hasEnoughStorage && !isDownloaded) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "⚠️ Low storage — ${formatSize(model.sizeBytes)} needed",
+                    "Warning: Low storage — ${formatSize(model.sizeBytes)} needed",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.tertiary
                 )
@@ -321,7 +321,7 @@ private fun ModelCard(
                 downloadState is DownloadState.Error -> {
                     Column {
                         Text(
-                            "❌ Download failed: ${downloadState.message}",
+                            "Download failed: ${downloadState.message}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
@@ -354,7 +354,7 @@ private fun ModelCard(
                             onClick = { onSelect(model) },
                             enabled = !isActive
                         ) {
-                            Text(if (isActive) "✓ Active" else "Use Model")
+                            Text(if (isActive) "Active" else "Use Model")
                         }
                     }
                 }

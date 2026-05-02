@@ -26,6 +26,10 @@ class LocalModelManager(private val context: Context) {
         private const val MODELS_DIR = "models"
         private const val HF_BASE = "https://huggingface.co"
 
+        // Singleton download scope — survives screen navigation
+        private val downloadScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        private val _globalDownloads = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
+
         /**
          * Model catalog — using GGUF models from ungated HuggingFace repos.
          *
@@ -145,11 +149,10 @@ class LocalModelManager(private val context: Context) {
     }
 
     private val modelsDir: File = File(context.filesDir, MODELS_DIR).also { it.mkdirs() }
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = downloadScope
 
-    // Download state tracking
-    private val _downloads = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
-    val downloads: StateFlow<Map<String, DownloadState>> = _downloads.asStateFlow()
+    // Download state — uses singleton so downloads survive navigation
+    val downloads: StateFlow<Map<String, DownloadState>> = _globalDownloads.asStateFlow()
 
     /**
      * List all downloaded models.
@@ -187,7 +190,7 @@ class LocalModelManager(private val context: Context) {
      */
     fun downloadModel(model: ModelInfo) {
         // Don't start duplicate downloads
-        val currentState = _downloads.value[model.id]
+        val currentState = _globalDownloads.value[model.id]
         if (currentState is DownloadState.Downloading) return
 
         scope.launch {
@@ -195,7 +198,7 @@ class LocalModelManager(private val context: Context) {
             val tempFile = File(modelsDir, "${model.filename}.tmp")
 
             try {
-                _downloads.value = _downloads.value + (model.id to DownloadState.Downloading(0f))
+                _globalDownloads.value = _globalDownloads.value + (model.id to DownloadState.Downloading(0f))
                 Log.i(TAG, "Starting download: ${model.name} from ${model.downloadUrl}")
 
                 var currentUrl = model.downloadUrl
@@ -252,7 +255,7 @@ class LocalModelManager(private val context: Context) {
                         (totalRead.toFloat() / totalBytes).coerceIn(0f, 1f)
                     } else 0f
 
-                    _downloads.value = _downloads.value + (model.id to DownloadState.Downloading(progress))
+                    _globalDownloads.value = _globalDownloads.value + (model.id to DownloadState.Downloading(progress))
                 }
 
                 outputStream.flush()
@@ -264,11 +267,11 @@ class LocalModelManager(private val context: Context) {
                 tempFile.renameTo(outputFile)
 
                 Log.i(TAG, "Download complete: ${model.name} (${outputFile.length()} bytes)")
-                _downloads.value = _downloads.value + (model.id to DownloadState.Complete)
+                _globalDownloads.value = _globalDownloads.value + (model.id to DownloadState.Complete)
 
             } catch (e: Exception) {
                 Log.e(TAG, "Download failed: ${model.name}", e)
-                _downloads.value = _downloads.value + (model.id to DownloadState.Error(e.message ?: "Unknown error"))
+                _globalDownloads.value = _globalDownloads.value + (model.id to DownloadState.Error(e.message ?: "Unknown error"))
                 // Don't delete temp file — allows resume on retry
             }
         }
@@ -278,7 +281,7 @@ class LocalModelManager(private val context: Context) {
      * Cancel an in-progress download.
      */
     fun cancelDownload(model: ModelInfo) {
-        _downloads.value = _downloads.value - model.id
+        _globalDownloads.value = _globalDownloads.value - model.id
         // The coroutine will fail on next write since we're not tracking the job
         // TODO: Track individual download jobs for proper cancellation
         val tempFile = File(modelsDir, "${model.filename}.tmp")
@@ -294,7 +297,7 @@ class LocalModelManager(private val context: Context) {
         val tempFile = File(modelsDir, "${model.filename}.tmp")
         val deleted = file.delete()
         tempFile.delete()
-        _downloads.value = _downloads.value - modelId
+        _globalDownloads.value = _globalDownloads.value - modelId
         if (deleted) Log.i(TAG, "Deleted model: $modelId")
         return deleted
     }

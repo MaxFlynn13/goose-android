@@ -213,7 +213,7 @@ private fun ErrorScreen(error: String, onRetry: () -> Unit) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            "⚠️",
+            "!!",
             style = MaterialTheme.typography.displayLarge
         )
         Spacer(modifier = Modifier.height(16.dp))

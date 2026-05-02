@@ -1,21 +1,35 @@
 package io.github.gooseandroid.ui.chat
 
+import android.app.Application
 import android.util.Log
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.gooseandroid.GoosePortHolder
+import io.github.gooseandroid.LocalModelManager
 import io.github.gooseandroid.acp.AcpClient
-import io.github.gooseandroid.acp.AcpNotification
+import io.github.gooseandroid.data.SettingsKeys
+import io.github.gooseandroid.data.SettingsStore
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.*
 import java.util.UUID
 
-class ChatViewModel : ViewModel() {
+/**
+ * ViewModel for the chat screen.
+ * Scoped to the activity lifecycle — survives navigation.
+ *
+ * Connects to either:
+ * 1. goose serve (full backend with tools) via ACP WebSocket
+ * 2. Local model inference (GGUF via LiteRT) for offline use
+ * 3. Cloud LLM API directly (when goose binary isn't available)
+ */
+class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "ChatViewModel"
     }
+
+    private val settingsStore = SettingsStore(application)
+    private val modelManager = LocalModelManager(application)
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
@@ -24,10 +38,6 @@ class ChatViewModel : ViewModel() {
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
     private var acpClient: AcpClient? = null
-    val connectionState: StateFlow<AcpClient.ConnectionState>
-        get() = acpClient?.connectionState ?: MutableStateFlow(AcpClient.ConnectionState.DISCONNECTED)
-
-    private var currentAssistantMessageId: String? = null
 
     init {
         connectToGoose()
@@ -35,18 +45,14 @@ class ChatViewModel : ViewModel() {
 
     private fun connectToGoose() {
         viewModelScope.launch {
-            // Check if we're in local-only mode (no goose binary)
             if (GoosePortHolder.localOnlyMode) {
                 Log.i(TAG, "Running in local-only mode")
                 addSystemMessage(
-                    "🪿 Welcome to Goose!\n\n" +
-                    "The Goose backend binary isn't installed yet. You can:\n\n" +
-                    "• **Configure a cloud API** — Go to Settings and add an API key " +
-                    "(Anthropic, OpenAI, or Google)\n\n" +
-                    "• **Download a local model** — Go to Settings → Local Models " +
-                    "to run AI completely on-device\n\n" +
-                    "Once the full build is ready, Goose will have shell access, " +
-                    "file editing, and all MCP extensions."
+                    "Welcome to Goose!\n\n" +
+                    "The Goose backend is not installed yet. You can:\n\n" +
+                    "- Configure a cloud API key in Settings\n" +
+                    "- Download a local model in Settings > Local Models\n\n" +
+                    "Once configured, type a message to start chatting."
                 )
                 return@launch
             }
@@ -58,14 +64,12 @@ class ChatViewModel : ViewModel() {
             val client = AcpClient(url)
             acpClient = client
 
-            // Listen for notifications (streaming responses)
             launch {
                 client.notifications.collect { notification ->
                     handleNotification(notification)
                 }
             }
 
-            // Connect and initialize
             val result = client.connect()
             result.onSuccess {
                 Log.i(TAG, "Connected to goose, creating session...")
@@ -84,129 +88,235 @@ class ChatViewModel : ViewModel() {
     }
 
     fun sendMessage(text: String) {
-        if (text.isBlank()) return
-
-        // Add user message to UI
-        val userMessage = ChatMessage(
+        // Add user message immediately
+        val userMsg = ChatMessage(
             id = UUID.randomUUID().toString(),
             role = MessageRole.USER,
             content = text
         )
-        _messages.value = _messages.value + userMessage
-        _isGenerating.value = true
+        _messages.value = _messages.value + userMsg
 
-        // Prepare assistant message placeholder
-        currentAssistantMessageId = UUID.randomUUID().toString()
-        val assistantMessage = ChatMessage(
-            id = currentAssistantMessageId!!,
-            role = MessageRole.ASSISTANT,
-            content = ""
-        )
-        _messages.value = _messages.value + assistantMessage
-
-        // Send to goose
         viewModelScope.launch {
-            val result = acpClient?.sendPrompt(text)
-            result?.onFailure { error ->
-                Log.e(TAG, "Failed to send prompt", error)
-                updateAssistantMessage("Error: ${error.message}")
+            _isGenerating.value = true
+
+            try {
+                if (GoosePortHolder.localOnlyMode) {
+                    // Use local model or cloud API directly
+                    handleLocalMessage(text)
+                } else {
+                    // Use goose serve via ACP
+                    val client = acpClient
+                    if (client != null) {
+                        client.sendPrompt(text)
+                    } else {
+                        addSystemMessage("Not connected to Goose. Check Settings.")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending message", e)
+                addSystemMessage("Error: ${e.message}")
+            } finally {
                 _isGenerating.value = false
             }
         }
     }
 
-    fun cancelGeneration() {
-        viewModelScope.launch {
-            acpClient?.cancel()
-            _isGenerating.value = false
-        }
-    }
+    /**
+     * Handle message when in local-only mode.
+     * Routes to either local model inference or cloud API.
+     */
+    private suspend fun handleLocalMessage(text: String) {
+        // Check if we have a local model selected
+        val localModelId = settingsStore.getLocalModelId().first()
+        val downloadedModels = modelManager.getDownloadedModels()
+        val activeModel = downloadedModels.find { it.id == localModelId }
 
-    private fun handleNotification(notification: AcpNotification) {
-        when (notification.method) {
-            "session/update" -> handleSessionUpdate(notification.params)
-            "session/error" -> handleSessionError(notification.params)
-            else -> Log.d(TAG, "Unhandled notification: ${notification.method}")
-        }
-    }
-
-    private fun handleSessionUpdate(params: JsonObject) {
-        // Extract content from the session update
-        // ACP sends incremental updates with content blocks
-        val update = params["update"]?.jsonObject ?: params
-
-        // Check for message content
-        val content = update["content"]?.let { contentElement ->
-            when (contentElement) {
-                is JsonArray -> {
-                    contentElement.mapNotNull { block ->
-                        val blockObj = block.jsonObject
-                        when (blockObj["type"]?.jsonPrimitive?.content) {
-                            "text" -> blockObj["text"]?.jsonPrimitive?.content
-                            else -> null
-                        }
-                    }.joinToString("")
-                }
-                is JsonPrimitive -> contentElement.content
-                else -> null
+        if (activeModel != null) {
+            // Use local model inference
+            val modelFile = modelManager.getModelFile(activeModel)
+            if (modelFile.exists()) {
+                addSystemMessage(
+                    "Local model inference is being set up.\n\n" +
+                    "Model: ${activeModel.name}\n" +
+                    "File: ${modelFile.name}\n\n" +
+                    "LiteRT inference engine integration is in progress. " +
+                    "Once complete, this model will respond directly on-device."
+                )
+                // TODO: Wire to actual LiteRT inference
+                return
             }
         }
 
-        if (content != null) {
-            updateAssistantMessage(content)
+        // Check for cloud API key
+        val anthropicKey = settingsStore.getString(SettingsKeys.ANTHROPIC_API_KEY).first()
+        val openaiKey = settingsStore.getString(SettingsKeys.OPENAI_API_KEY).first()
+        val googleKey = settingsStore.getString(SettingsKeys.GOOGLE_API_KEY).first()
+
+        when {
+            anthropicKey.isNotBlank() -> {
+                callCloudApi("anthropic", anthropicKey, text)
+            }
+            openaiKey.isNotBlank() -> {
+                callCloudApi("openai", openaiKey, text)
+            }
+            googleKey.isNotBlank() -> {
+                callCloudApi("google", googleKey, text)
+            }
+            else -> {
+                addSystemMessage(
+                    "No model configured.\n\n" +
+                    "Go to Settings to either:\n" +
+                    "- Add a cloud API key (Anthropic, OpenAI, Google)\n" +
+                    "- Download a local model for offline use"
+                )
+            }
+        }
+    }
+
+    /**
+     * Direct cloud API call (without goose serve).
+     * Simple completion — no tools, no MCP, just chat.
+     */
+    private suspend fun callCloudApi(provider: String, apiKey: String, text: String) {
+        try {
+            val response = when (provider) {
+                "anthropic" -> callAnthropic(apiKey, text)
+                "openai" -> callOpenAI(apiKey, text)
+                "google" -> callGoogle(apiKey, text)
+                else -> "Unknown provider"
+            }
+            val assistantMsg = ChatMessage(
+                id = UUID.randomUUID().toString(),
+                role = MessageRole.ASSISTANT,
+                content = response
+            )
+            _messages.value = _messages.value + assistantMsg
+        } catch (e: Exception) {
+            addSystemMessage("API Error: ${e.message}")
+        }
+    }
+
+    private suspend fun callAnthropic(apiKey: String, text: String): String {
+        val url = java.net.URL("https://api.anthropic.com/v1/messages")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("x-api-key", apiKey)
+        conn.setRequestProperty("anthropic-version", "2023-06-01")
+        conn.doOutput = true
+
+        val body = """
+            {"model":"claude-sonnet-4-20250514","max_tokens":4096,"messages":[{"role":"user","content":"$text"}]}
+        """.trimIndent()
+
+        conn.outputStream.use { it.write(body.toByteArray()) }
+
+        val responseCode = conn.responseCode
+        if (responseCode != 200) {
+            val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
+            throw Exception("Anthropic API error: $error")
         }
 
-        // Check for tool calls
-        val toolCalls = update["toolCalls"]?.jsonArray
-        toolCalls?.forEach { toolCallElement ->
-            val toolCall = toolCallElement.jsonObject
-            val name = toolCall["name"]?.jsonPrimitive?.content ?: "unknown"
-            val status = toolCall["status"]?.jsonPrimitive?.content
-            addToolCallToCurrentMessage(name, status)
+        val response = conn.inputStream.bufferedReader().readText()
+        // Simple JSON parsing — extract content text
+        val textMatch = Regex(""""text"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(response)
+        return textMatch?.groupValues?.get(1)
+            ?.replace("\\n", "\n")
+            ?.replace("\\\"", "\"")
+            ?.replace("\\\\", "\\")
+            ?: "No response received"
+    }
+
+    private suspend fun callOpenAI(apiKey: String, text: String): String {
+        val url = java.net.URL("https://api.openai.com/v1/chat/completions")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Authorization", "Bearer $apiKey")
+        conn.doOutput = true
+
+        val body = """
+            {"model":"gpt-4o","messages":[{"role":"user","content":"$text"}]}
+        """.trimIndent()
+
+        conn.outputStream.use { it.write(body.toByteArray()) }
+
+        val responseCode = conn.responseCode
+        if (responseCode != 200) {
+            val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
+            throw Exception("OpenAI API error: $error")
         }
 
-        // Check if generation is complete
-        val finished = update["finished"]?.jsonPrimitive?.booleanOrNull
-            ?: update["done"]?.jsonPrimitive?.booleanOrNull
-        if (finished == true) {
+        val response = conn.inputStream.bufferedReader().readText()
+        val contentMatch = Regex(""""content"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(response)
+        return contentMatch?.groupValues?.get(1)
+            ?.replace("\\n", "\n")
+            ?.replace("\\\"", "\"")
+            ?.replace("\\\\", "\\")
+            ?: "No response received"
+    }
+
+    private suspend fun callGoogle(apiKey: String, text: String): String {
+        val url = java.net.URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$apiKey")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+
+        val body = """
+            {"contents":[{"parts":[{"text":"$text"}]}]}
+        """.trimIndent()
+
+        conn.outputStream.use { it.write(body.toByteArray()) }
+
+        val responseCode = conn.responseCode
+        if (responseCode != 200) {
+            val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
+            throw Exception("Google AI error: $error")
+        }
+
+        val response = conn.inputStream.bufferedReader().readText()
+        val textMatch = Regex(""""text"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(response)
+        return textMatch?.groupValues?.get(1)
+            ?.replace("\\n", "\n")
+            ?.replace("\\\"", "\"")
+            ?.replace("\\\\", "\\")
+            ?: "No response received"
+    }
+
+    /**
+     * Pre-fill the chat with a recipe prompt (user can edit before sending).
+     */
+    fun prefillPrompt(prompt: String) {
+        _pendingPrompt.value = prompt
+    }
+
+    private val _pendingPrompt = MutableStateFlow<String?>(null)
+    val pendingPrompt: StateFlow<String?> = _pendingPrompt.asStateFlow()
+
+    fun clearPendingPrompt() {
+        _pendingPrompt.value = null
+    }
+
+    fun cancelGeneration() {
+        viewModelScope.launch {
+            acpClient?.cancelCurrentRequest()
             _isGenerating.value = false
-            currentAssistantMessageId = null
         }
     }
 
-    private fun handleSessionError(params: JsonObject) {
-        val message = params["message"]?.jsonPrimitive?.content
-            ?: params["error"]?.jsonPrimitive?.content
-            ?: "Unknown error"
-        updateAssistantMessage("Error: $message")
-        _isGenerating.value = false
-    }
-
-    private fun updateAssistantMessage(content: String) {
-        val msgId = currentAssistantMessageId ?: return
-        _messages.value = _messages.value.map { msg ->
-            if (msg.id == msgId) msg.copy(content = content) else msg
-        }
-    }
-
-    private fun addToolCallToCurrentMessage(name: String, status: String?) {
-        val msgId = currentAssistantMessageId ?: return
-        _messages.value = _messages.value.map { msg ->
-            if (msg.id == msgId) {
-                val toolStatus = when (status) {
-                    "running" -> ToolCallStatus.RUNNING
-                    "complete", "success" -> ToolCallStatus.COMPLETE
-                    "error" -> ToolCallStatus.ERROR
-                    else -> ToolCallStatus.RUNNING
-                }
-                val existingTool = msg.toolCalls.find { it.name == name }
-                val updatedTools = if (existingTool != null) {
-                    msg.toolCalls.map { if (it.name == name) it.copy(status = toolStatus) else it }
-                } else {
-                    msg.toolCalls + ToolCall(name = name, status = toolStatus)
-                }
-                msg.copy(toolCalls = updatedTools)
-            } else msg
+    private fun handleNotification(notification: Map<String, Any?>) {
+        val method = notification["method"] as? String ?: return
+        when (method) {
+            "notifications/message" -> {
+                val content = notification["content"] as? String ?: return
+                val msg = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    role = MessageRole.ASSISTANT,
+                    content = content
+                )
+                _messages.value = _messages.value + msg
+            }
         }
     }
 
@@ -217,10 +327,5 @@ class ChatViewModel : ViewModel() {
             content = text
         )
         _messages.value = _messages.value + msg
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        acpClient?.disconnect()
     }
 }

@@ -18,6 +18,7 @@ import io.github.gooseandroid.ui.chat.ChatScreen
 import io.github.gooseandroid.ui.chat.ChatViewModel
 import io.github.gooseandroid.ui.extensions.ExtensionsScreen
 import io.github.gooseandroid.ui.history.HistoryScreen
+import io.github.gooseandroid.ui.recipes.RecipesScreen
 import io.github.gooseandroid.ui.models.ModelsScreen
 import io.github.gooseandroid.ui.panel.SidePanel
 import io.github.gooseandroid.ui.panel.PanelSide
@@ -59,7 +60,7 @@ fun GooseNavigation() {
                 Scaffold(
                     topBar = {
                         TopAppBar(
-                            title = { Text("🪿 Goose") },
+                            title = { Text("Goose") },
                             navigationIcon = {
                                 IconButton(onClick = { panelOpen = !panelOpen }) {
                                     Icon(Icons.Default.Menu, contentDescription = "Menu")
@@ -96,6 +97,19 @@ fun GooseNavigation() {
                     currentTheme = appTheme,
                     onThemeChanged = { appTheme = it },
                     onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable("recipes") {
+                RecipesScreen(
+                    onBack = { navController.popBackStack() },
+                    onUseRecipe = { recipe ->
+                        // Pre-fill chat with recipe prompt
+                        chatViewModel.prefillPrompt(recipe.prompt)
+                        navController.navigate("chat") {
+                            popUpTo("chat") { inclusive = true }
+                        }
+                    }
                 )
             }
 

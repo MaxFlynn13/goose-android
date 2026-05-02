@@ -75,7 +75,7 @@ fun BrainScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("🧠 Brain")
+                        Text("Brain")
                         Text(
                             "$nodeCount nodes",
                             style = MaterialTheme.typography.bodySmall,
@@ -155,7 +155,12 @@ fun BrainScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("🧠", style = MaterialTheme.typography.displayLarge)
+                        Icon(
+                            Icons.Default.Psychology,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             if (searchQuery.isBlank()) "Brain is empty"

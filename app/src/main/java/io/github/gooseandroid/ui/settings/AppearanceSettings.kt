@@ -50,12 +50,16 @@ data class AppTheme(
     val panelSide: PanelSide = PanelSide.LEFT
 )
 
-enum class ThemeMode { LIGHT, DARK, SYSTEM }
+enum class ThemeMode { LIGHT, DARK, BLACK, SYSTEM }
 enum class PanelSide { LEFT, RIGHT }
 
 // Preset color palettes
 val COLOR_PRESETS = listOf(
-    Color(0xFFFF6B35), // Goose Orange (default)
+    Color(0xFFFFFFFF), // White
+    Color(0xFF000000), // Black
+    Color(0xFF808080), // Grey
+    Color(0xFF00D632), // Cash App Green (Neon Green)
+    Color(0xFFFF6B35), // Goose Orange
     Color(0xFF6366F1), // Indigo
     Color(0xFF8B5CF6), // Purple
     Color(0xFFEC4899), // Pink
@@ -64,9 +68,6 @@ val COLOR_PRESETS = listOf(
     Color(0xFF10B981), // Emerald
     Color(0xFF06B6D4), // Cyan
     Color(0xFF3B82F6), // Blue
-    Color(0xFF6B7280), // Gray
-    Color(0xFFFFFFFF), // White
-    Color(0xFF000000), // Black
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -135,6 +136,7 @@ fun AppearanceSettingsScreen(
                                     when (mode) {
                                         ThemeMode.LIGHT -> Icons.Default.LightMode
                                         ThemeMode.DARK -> Icons.Default.DarkMode
+                                        ThemeMode.BLACK -> Icons.Default.Contrast
                                         ThemeMode.SYSTEM -> Icons.Default.SettingsBrightness
                                     },
                                     null,

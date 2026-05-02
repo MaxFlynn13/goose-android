@@ -180,7 +180,7 @@ jobs:
           if [ -n "$ARBOARD_PKG" ]; then
             echo "Patching arboard: replacing with no-op stub for Android"
 
-            # Also ensure edition = "2021" in arboard's Cargo.toml
+            # Ensure edition = "2021" in arboard's Cargo.toml
             sed -i 's/edition = "2018"/edition = "2021"/' "$ARBOARD_PKG/Cargo.toml" || true
             sed -i 's/edition = "2015"/edition = "2021"/' "$ARBOARD_PKG/Cargo.toml" || true
 
@@ -221,6 +221,24 @@ jobs:
             echo "arboard stubbed ✓"
             echo "=== arboard Cargo.toml edition ==="
             grep "edition" "$ARBOARD_PKG/Cargo.toml" || true
+          fi
+
+          # === Patch 3: goose-mcp computercontroller platform ===
+          # The platform/mod.rs uses cfg(any(linux, android)) for the `pub use`
+          # but the actual linux module is only gated with cfg(linux).
+          # On Android, the use statement tries to import a non-existent module.
+          # Fix: gate the pub use with the same cfg as the module declaration.
+          PLATFORM_MOD="crates/goose-mcp/src/computercontroller/platform/mod.rs"
+          if [ -f "$PLATFORM_MOD" ]; then
+            echo "Patching goose-mcp platform module for Android"
+            # Replace the android inclusion in the pub use line
+            # Before: #[cfg(any(target_os = "linux", target_os = "android"))]
+            #         pub use self::linux::LinuxAutomation;
+            # After:  #[cfg(target_os = "linux")]
+            #         pub use self::linux::LinuxAutomation;
+            sed -i 's/#\[cfg(any(target_os = "linux", target_os = "android"))\]/#[cfg(target_os = "linux")]/' "$PLATFORM_MOD"
+            echo "Patched. Current content:"
+            cat "$PLATFORM_MOD"
           fi
 
           # Build with minimal features for Android

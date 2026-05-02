@@ -18,6 +18,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
+/**
+ * Chat screen — main conversation interface.
+ * Messages persist when navigating away (ViewModel scoped to activity).
+ */
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
@@ -25,8 +29,7 @@ fun ChatScreen(
 ) {
     val messages by viewModel.messages.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
-    val connectionState by viewModel.connectionState.collectAsState()
-
+    val pendingPrompt by viewModel.pendingPrompt.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
@@ -38,23 +41,20 @@ fun ChatScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        // Connection status bar
-        ConnectionStatusBar(connectionState)
-
-        // Messages list
+        // Messages list (takes all available space)
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(vertical = 16.dp)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(messages, key = { it.id }) { message ->
-                ChatMessageBubble(message)
+                MessageBubble(message = message)
             }
 
+            // Typing indicator
             if (isGenerating) {
                 item {
                     TypingIndicator()
@@ -62,51 +62,21 @@ fun ChatScreen(
             }
         }
 
-        // Input bar
+        // Input bar (fixed at bottom, keyboard pushes it up)
         ChatInputBar(
-            isGenerating = isGenerating,
             onSend = { text ->
                 viewModel.sendMessage(text)
-                scope.launch {
-                    // Scroll to bottom after sending
-                    if (messages.isNotEmpty()) {
-                        listState.animateScrollToItem(messages.size)
-                    }
-                }
             },
-            onCancel = { viewModel.cancelGeneration() }
+            isGenerating = isGenerating,
+            onCancel = { viewModel.cancelGeneration() },
+            prefillText = pendingPrompt,
+            onPrefillConsumed = { viewModel.clearPendingPrompt() }
         )
     }
 }
 
 @Composable
-private fun ConnectionStatusBar(state: io.github.gooseandroid.acp.AcpClient.ConnectionState) {
-    when (state) {
-        io.github.gooseandroid.acp.AcpClient.ConnectionState.CONNECTING -> {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
-        io.github.gooseandroid.acp.AcpClient.ConnectionState.ERROR -> {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.errorContainer
-            ) {
-                Text(
-                    "Connection error — retrying...",
-                    modifier = Modifier.padding(8.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-        }
-        else -> { /* No indicator for connected/disconnected */ }
-    }
-}
-
-@Composable
-private fun ChatMessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: ChatMessage) {
     val isUser = message.role == MessageRole.USER
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val bgColor = if (isUser) {
@@ -124,15 +94,6 @@ private fun ChatMessageBubble(message: ChatMessage) {
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = alignment
     ) {
-        // Role label
-        Text(
-            text = if (isUser) "You" else "Goose",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 4.dp, start = 4.dp, end = 4.dp)
-        )
-
-        // Message bubble
         Surface(
             shape = RoundedCornerShape(
                 topStart = 16.dp,
@@ -141,23 +102,19 @@ private fun ChatMessageBubble(message: ChatMessage) {
                 bottomEnd = if (isUser) 4.dp else 16.dp
             ),
             color = bgColor,
-            modifier = Modifier.widthIn(max = 320.dp)
+            modifier = Modifier.widthIn(max = 300.dp)
         ) {
-            // TODO: Replace with proper Markdown rendering
-            // using compose-richtext for code blocks, links, etc.
             Text(
                 text = message.content,
+                modifier = Modifier.padding(12.dp),
                 color = textColor,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(12.dp)
+                style = MaterialTheme.typography.bodyMedium
             )
         }
 
-        // Tool call indicator
-        if (message.toolCalls.isNotEmpty()) {
-            message.toolCalls.forEach { tool ->
-                ToolCallChip(tool)
-            }
+        // Tool calls
+        message.toolCalls.forEach { toolCall ->
+            ToolCallChip(toolCall)
         }
     }
 }
@@ -170,65 +127,71 @@ private fun ToolCallChip(toolCall: ToolCall) {
         modifier = Modifier.padding(top = 4.dp)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(
-                text = "🔧",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                text = toolCall.name,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-            if (toolCall.status == ToolCallStatus.RUNNING) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(12.dp),
-                    strokeWidth = 2.dp
-                )
+            val statusIcon = when (toolCall.status) {
+                ToolCallStatus.RUNNING -> "..."
+                ToolCallStatus.COMPLETE -> "done"
+                ToolCallStatus.ERROR -> "err"
             }
+            Text(
+                text = "[$statusIcon] ${toolCall.name}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
 @Composable
 private fun TypingIndicator() {
-    Row(
-        modifier = Modifier.padding(start = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.padding(top = 4.dp)
     ) {
-        repeat(3) {
-            Surface(
-                shape = RoundedCornerShape(50),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                modifier = Modifier.size(8.dp)
-            ) {}
-        }
+        Text(
+            text = "Thinking...",
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
 @Composable
 private fun ChatInputBar(
-    isGenerating: Boolean,
     onSend: (String) -> Unit,
-    onCancel: () -> Unit
+    isGenerating: Boolean,
+    onCancel: () -> Unit,
+    prefillText: String? = null,
+    onPrefillConsumed: () -> Unit = {}
 ) {
     var text by remember { mutableStateOf("") }
 
+    // Handle recipe prefill
+    LaunchedEffect(prefillText) {
+        if (prefillText != null) {
+            text = prefillText
+            onPrefillConsumed()
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shadowElevation = 8.dp,
+        tonalElevation = 2.dp,
         color = MaterialTheme.colorScheme.surface
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .windowInsetsPadding(WindowInsets.ime)
+                .windowInsetsPadding(WindowInsets.navigationBars),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Text input
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
@@ -247,18 +210,12 @@ private fun ChatInputBar(
                 )
             )
 
-            // Send / Cancel button
             if (isGenerating) {
-                FilledIconButton(
-                    onClick = onCancel,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
+                IconButton(onClick = onCancel) {
                     Icon(Icons.Default.Stop, contentDescription = "Cancel")
                 }
             } else {
-                FilledIconButton(
+                IconButton(
                     onClick = {
                         if (text.isNotBlank()) {
                             onSend(text.trim())

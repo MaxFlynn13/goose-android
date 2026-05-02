@@ -35,7 +35,7 @@ import androidx.compose.ui.unit.dp
  * - Apps (maybe)
  * - Scheduler
  * - Extensions
- * - Brain 🧠
+ * - Brain
  * - Settings
  */
 
@@ -51,6 +51,7 @@ data class PanelModule(
 val PANEL_MODULES = listOf(
     PanelModule("chat", "Chat", Icons.AutoMirrored.Filled.Chat, "chat"),
     PanelModule("history", "History", Icons.Default.History, "history"),
+    PanelModule("recipes", "Recipes", Icons.Default.AutoAwesome, "recipes"),
     PanelModule("brain", "Brain", Icons.Default.Psychology, "brain"),
     PanelModule("extensions", "Extensions", Icons.Default.Extension, "extensions"),
     PanelModule("models", "Models", Icons.Default.Memory, "models"),
@@ -100,10 +101,11 @@ fun SidePanel(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     // Goose logo at top
-                    Text(
-                        "🪿",
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(bottom = 16.dp)
+                    Icon(
+                        Icons.Default.SmartToy,
+                        contentDescription = "Goose",
+                        modifier = Modifier.size(28.dp).padding(bottom = 8.dp),
+                        tint = MaterialTheme.colorScheme.primary
                     )
 
                     // Module buttons
