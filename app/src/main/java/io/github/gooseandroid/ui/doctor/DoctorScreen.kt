@@ -24,10 +24,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.github.gooseandroid.GoosePortHolder
+import io.github.gooseandroid.data.SettingsKeys
+import io.github.gooseandroid.data.SettingsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.Socket
@@ -78,35 +83,53 @@ fun DoctorScreen(onBack: () -> Unit) {
             }
             checks = checks.map { if (it.id == "goose_binary") binaryCheck else it }
 
-            // Goose Server
+            // Goose Server — use GoosePortHolder.port
             val serverCheck = withContext(Dispatchers.IO) {
-                try {
-                    val socket = Socket("127.0.0.1", 3000)
-                    socket.close()
-                    DoctorCheck("goose_server", "Goose Server", CheckStatus.PASS, "Server responding on port 3000")
-                } catch (e: Exception) {
-                    DoctorCheck("goose_server", "Goose Server", CheckStatus.FAIL, "Cannot connect to port 3000: ${e.message}")
+                val port = GoosePortHolder.port
+                if (port == 0) {
+                    DoctorCheck("goose_server", "Goose Server", CheckStatus.WARN, "Server port not assigned")
+                } else {
+                    try {
+                        val socket = Socket("127.0.0.1", port)
+                        socket.close()
+                        DoctorCheck("goose_server", "Goose Server", CheckStatus.PASS, "Server responding on port $port")
+                    } catch (e: Exception) {
+                        DoctorCheck("goose_server", "Goose Server", CheckStatus.FAIL, "Cannot connect to port $port: ${e.message}")
+                    }
                 }
             }
             checks = checks.map { if (it.id == "goose_server") serverCheck else it }
 
-            // Internet Connection
+            // Internet Connection — try google.com, then cloudflare as fallback
             val internetCheck = withContext(Dispatchers.IO) {
-                try {
-                    val url = URL("https://www.google.com")
-                    val connection = url.openConnection() as HttpURLConnection
-                    connection.connectTimeout = 5000
-                    connection.readTimeout = 5000
-                    connection.requestMethod = "HEAD"
-                    val responseCode = connection.responseCode
-                    connection.disconnect()
-                    if (responseCode in 200..399) {
-                        DoctorCheck("internet", "Internet Connection", CheckStatus.PASS, "Connected (HTTP $responseCode)")
-                    } else {
-                        DoctorCheck("internet", "Internet Connection", CheckStatus.WARN, "Unexpected response: HTTP $responseCode")
+                fun tryConnect(urlString: String): Int? {
+                    return try {
+                        val url = URL(urlString)
+                        val connection = url.openConnection() as HttpURLConnection
+                        connection.connectTimeout = 5000
+                        connection.readTimeout = 5000
+                        connection.requestMethod = "HEAD"
+                        val responseCode = connection.responseCode
+                        connection.disconnect()
+                        responseCode
+                    } catch (e: Exception) {
+                        null
                     }
-                } catch (e: Exception) {
-                    DoctorCheck("internet", "Internet Connection", CheckStatus.FAIL, "No internet: ${e.message}")
+                }
+
+                val googleResponse = tryConnect("https://www.google.com")
+                if (googleResponse != null && googleResponse in 200..399) {
+                    DoctorCheck("internet", "Internet Connection", CheckStatus.PASS, "Connected (google.com HTTP $googleResponse)")
+                } else {
+                    // Fallback to Cloudflare
+                    val cfResponse = tryConnect("https://1.1.1.1")
+                    if (cfResponse != null && cfResponse in 200..399) {
+                        DoctorCheck("internet", "Internet Connection", CheckStatus.PASS, "Connected (cloudflare HTTP $cfResponse)")
+                    } else if (googleResponse != null) {
+                        DoctorCheck("internet", "Internet Connection", CheckStatus.WARN, "Unexpected response: HTTP $googleResponse")
+                    } else {
+                        DoctorCheck("internet", "Internet Connection", CheckStatus.FAIL, "No internet: could not reach google.com or cloudflare.com")
+                    }
                 }
             }
             checks = checks.map { if (it.id == "internet") internetCheck else it }
@@ -149,21 +172,29 @@ fun DoctorScreen(onBack: () -> Unit) {
             }
             checks = checks.map { if (it.id == "ram") ramCheck else it }
 
-            // Provider Configured — check DataStore preferences file
+            // Provider Configured — use SettingsStore to read API keys properly
             val providerCheck = withContext(Dispatchers.IO) {
                 val configured = mutableListOf<String>()
-                // DataStore stores in datastore/goose_settings.preferences_pb
-                // We check by reading the file or using a simpler approach
-                val prefsFile = java.io.File(context.filesDir, "datastore/goose_settings.preferences_pb")
-                if (prefsFile.exists()) {
-                    val content = prefsFile.readBytes().toString(Charsets.UTF_8)
-                    if (content.contains("anthropic_api_key")) configured.add("Anthropic")
-                    if (content.contains("openai_api_key")) configured.add("OpenAI")
-                    if (content.contains("google_api_key")) configured.add("Google")
-                    if (content.contains("mistral_api_key")) configured.add("Mistral")
-                    if (content.contains("openrouter_api_key")) configured.add("OpenRouter")
-                    if (content.contains("ollama_base_url")) configured.add("Ollama")
+                val settingsStore = SettingsStore(context)
+
+                val keyChecks = listOf(
+                    SettingsKeys.ANTHROPIC_API_KEY to "Anthropic",
+                    SettingsKeys.OPENAI_API_KEY to "OpenAI",
+                    SettingsKeys.GOOGLE_API_KEY to "Google",
+                    SettingsKeys.MISTRAL_API_KEY to "Mistral",
+                    SettingsKeys.OPENROUTER_API_KEY to "OpenRouter",
+                    SettingsKeys.OLLAMA_BASE_URL to "Ollama"
+                )
+
+                for ((key, label) in keyChecks) {
+                    val value = withTimeoutOrNull(2000) {
+                        settingsStore.getString(key).first()
+                    }
+                    if (!value.isNullOrBlank()) {
+                        configured.add(label)
+                    }
                 }
+
                 // Also check environment variables
                 if (!System.getenv("ANTHROPIC_API_KEY").isNullOrBlank()) configured.add("Anthropic (env)")
                 if (!System.getenv("OPENAI_API_KEY").isNullOrBlank()) configured.add("OpenAI (env)")
@@ -191,15 +222,21 @@ fun DoctorScreen(onBack: () -> Unit) {
             }
             checks = checks.map { if (it.id == "local_models") modelsCheck else it }
 
-            // Extensions — check DataStore for extension toggles
+            // Extensions — use SettingsStore
             val extensionsCheck = withContext(Dispatchers.IO) {
                 val enabled = mutableListOf<String>()
-                val prefsFile = java.io.File(context.filesDir, "datastore/goose_settings.preferences_pb")
-                if (prefsFile.exists()) {
-                    val content = prefsFile.readBytes().toString(Charsets.UTF_8)
-                    if (content.contains("ext_developer")) enabled.add("Developer")
-                    if (content.contains("ext_memory")) enabled.add("Memory")
+                val settingsStore = SettingsStore(context)
+
+                val devEnabled = withTimeoutOrNull(2000) {
+                    settingsStore.getString(SettingsKeys.EXTENSION_DEVELOPER).first()
                 }
+                val memEnabled = withTimeoutOrNull(2000) {
+                    settingsStore.getString(SettingsKeys.EXTENSION_MEMORY).first()
+                }
+
+                if (!devEnabled.isNullOrBlank()) enabled.add("Developer")
+                if (!memEnabled.isNullOrBlank()) enabled.add("Memory")
+
                 // Default: developer and memory are enabled
                 if (enabled.isEmpty()) enabled.addAll(listOf("Developer (default)", "Memory (default)"))
                 DoctorCheck("extensions", "Extensions", CheckStatus.PASS, "Active: ${enabled.joinToString(", ")}")

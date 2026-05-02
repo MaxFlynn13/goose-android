@@ -1,6 +1,7 @@
 package io.github.gooseandroid
 
 import android.Manifest
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -23,8 +24,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import io.github.gooseandroid.ui.GooseNavigation
 import io.github.gooseandroid.ui.theme.GooseTheme
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -35,8 +42,12 @@ class MainActivity : ComponentActivity() {
 
     private var gooseService: GooseService? = null
     private var serviceBound = false
-    private var serviceReady = mutableStateOf(false)
-    private var serviceError = mutableStateOf<String?>(null)
+    private val _serviceReady = MutableStateFlow(false)
+    private val serviceReady: StateFlow<Boolean> = _serviceReady
+    private val _serviceError = MutableStateFlow<String?>(null)
+    private val serviceError: StateFlow<String?> = _serviceError
+
+    private var pollingJob: Job? = null
 
     // Shared content from other apps via ShareReceiverActivity
     var sharedText: String? = null
@@ -53,7 +64,7 @@ class MainActivity : ComponentActivity() {
         override fun onServiceDisconnected(name: ComponentName?) {
             gooseService = null
             serviceBound = false
-            serviceReady.value = false
+            _serviceReady.value = false
         }
     }
 
@@ -66,26 +77,40 @@ class MainActivity : ComponentActivity() {
         sharedText = intent?.getStringExtra("shared_text")
 
         val serviceIntent = Intent(this, GooseService::class.java)
-        startForegroundService(serviceIntent)
+        try {
+            startForegroundService(serviceIntent)
+        } catch (e: Exception) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                e is ForegroundServiceStartNotAllowedException
+            ) {
+                Log.e(TAG, "Cannot start foreground service from background", e)
+                _serviceError.value = "Cannot start service: app is in the background. Please reopen the app."
+            } else {
+                throw e
+            }
+        }
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         setContent {
             GooseTheme {
+                val ready by serviceReady.collectAsState()
+                val error by serviceError.collectAsState()
+
                 // Scaffold handles system bar insets properly
                 Scaffold(
                     modifier = Modifier.fillMaxSize()
                 ) { innerPadding ->
                     Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
                         when {
-                            serviceError.value != null -> ErrorScreen(serviceError.value!!) { restartService() }
-                            !serviceReady.value -> LoadingScreen()
+                            error != null -> ErrorScreen(error!!) { restartService() }
+                            !ready -> LoadingScreen()
                             else -> {
                                 Surface(
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .consumeWindowInsets(innerPadding)
                                 ) {
-                                    GooseNavigation()
+                                    GooseNavigation(sharedText = sharedText)
                                 }
                             }
                         }
@@ -97,59 +122,78 @@ class MainActivity : ComponentActivity() {
         pollServiceReady()
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent?.getStringExtra("shared_text")?.let { text ->
+            sharedText = text
+        }
+    }
+
     private fun pollServiceReady() {
-        Thread {
+        pollingJob?.cancel()
+        pollingJob = lifecycleScope.launch {
             val timeout = 15_000L
             val start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < timeout) {
                 if (GoosePortHolder.localOnlyMode) {
-                    runOnUiThread { serviceReady.value = true }
-                    return@Thread
+                    _serviceReady.value = true
+                    return@launch
                 }
                 val service = gooseService
                 if (service != null && service.isRunning()) {
                     GoosePortHolder.port = service.getPort()
-                    runOnUiThread { serviceReady.value = true }
-                    return@Thread
+                    _serviceReady.value = true
+                    return@launch
                 }
-                Thread.sleep(200)
+                delay(200)
             }
             if (GoosePortHolder.localOnlyMode) {
-                runOnUiThread { serviceReady.value = true }
+                _serviceReady.value = true
             } else {
-                runOnUiThread {
-                    serviceError.value = "Goose backend not available.\nConfigure a cloud API key or download a local model in Settings."
-                }
+                _serviceError.value = "Goose backend not available.\nConfigure a cloud API key or download a local model in Settings."
             }
-        }.start()
+        }
     }
 
     private fun restartService() {
-        serviceError.value = null
-        serviceReady.value = false
+        _serviceError.value = null
+        _serviceReady.value = false
         if (serviceBound) {
             unbindService(serviceConnection)
             serviceBound = false
         }
         val stopIntent = Intent(this, GooseService::class.java)
         stopService(stopIntent)
-        Thread {
-            Thread.sleep(1000)
-            runOnUiThread {
-                val startIntent = Intent(this, GooseService::class.java)
+        lifecycleScope.launch {
+            delay(1000)
+            val startIntent = Intent(this@MainActivity, GooseService::class.java)
+            try {
                 startForegroundService(startIntent)
-                bindService(startIntent, serviceConnection, Context.BIND_AUTO_CREATE)
-                pollServiceReady()
+            } catch (e: Exception) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                    e is ForegroundServiceStartNotAllowedException
+                ) {
+                    Log.e(TAG, "Cannot start foreground service from background", e)
+                    _serviceError.value = "Cannot start service: app is in the background. Please reopen the app."
+                    return@launch
+                } else {
+                    throw e
+                }
             }
-        }.start()
+            bindService(startIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+            pollServiceReady()
+        }
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        pollingJob?.cancel()
+        pollingJob = null
         if (serviceBound) {
             unbindService(serviceConnection)
             serviceBound = false
         }
+        super.onDestroy()
     }
 
     private fun requestNotificationPermission() {

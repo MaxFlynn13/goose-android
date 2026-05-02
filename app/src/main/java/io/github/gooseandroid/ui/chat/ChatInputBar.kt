@@ -7,9 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Base64
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
@@ -33,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
+/** Maximum file size allowed for attachments: 1 MB */
+private const val MAX_FILE_SIZE_BYTES = 1_048_576L // 1 MB
+
 /**
  * Data class representing an attached file ready to be sent with a message.
  */
@@ -40,7 +46,8 @@ data class FileAttachment(
     val uri: Uri,
     val name: String,
     val content: String,
-    val mimeType: String
+    val mimeType: String,
+    val sizeBytes: Long = 0L
 )
 
 /**
@@ -61,6 +68,11 @@ fun ChatInputBar(
     val attachments = remember { mutableStateListOf<FileAttachment>() }
     var isListening by remember { mutableStateOf(false) }
 
+    // Fix #1: Check if speech recognition is available on this device
+    val isSpeechAvailable = remember {
+        SpeechRecognizer.isRecognitionAvailable(context)
+    }
+
     // Handle recipe prefill
     LaunchedEffect(prefillText) {
         if (prefillText != null) {
@@ -74,6 +86,16 @@ fun ChatInputBar(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
+            val fileSize = getFileSize(context, uri)
+            // Fix #2: Check file size before reading (max 1MB)
+            if (fileSize > MAX_FILE_SIZE_BYTES) {
+                Toast.makeText(
+                    context,
+                    "File too large (${formatFileSize(fileSize)}). Maximum allowed is 1 MB.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@rememberLauncherForActivityResult
+            }
             val fileContent = readFileContent(context, uri)
             val fileName = getFileName(context, uri)
             val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
@@ -83,47 +105,60 @@ fun ChatInputBar(
                         uri = uri,
                         name = fileName,
                         content = fileContent,
-                        mimeType = mimeType
+                        mimeType = mimeType,
+                        sizeBytes = fileSize
                     )
                 )
             }
         }
     }
 
-    // Voice input (SpeechRecognizer)
-    val speechRecognizer = remember { SpeechRecognizer.createSpeechRecognizer(context) }
+    // Fix #4: SpeechRecognizer created inside DisposableEffect with proper cleanup
+    val speechRecognizer = remember { mutableStateOf<SpeechRecognizer?>(null) }
     val voiceText = remember { mutableStateOf("") }
 
     DisposableEffect(Unit) {
-        val listener = object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {
-                isListening = false
-            }
-            override fun onError(error: Int) {
-                isListening = false
-            }
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    voiceText.value = matches[0]
-                }
-                isListening = false
-            }
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                if (!matches.isNullOrEmpty()) {
-                    voiceText.value = matches[0]
-                }
-            }
-            override fun onEvent(eventType: Int, params: Bundle?) {}
+        // Only create recognizer if speech is available
+        val recognizer = if (isSpeechAvailable) {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        } else {
+            null
         }
-        speechRecognizer.setRecognitionListener(listener)
+
+        if (recognizer != null) {
+            val listener = object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {
+                    isListening = false
+                }
+                override fun onError(error: Int) {
+                    isListening = false
+                }
+                override fun onResults(results: Bundle?) {
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (!matches.isNullOrEmpty()) {
+                        voiceText.value = matches[0]
+                    }
+                    isListening = false
+                }
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    if (!matches.isNullOrEmpty()) {
+                        voiceText.value = matches[0]
+                    }
+                }
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            }
+            recognizer.setRecognitionListener(listener)
+        }
+
+        speechRecognizer.value = recognizer
+
         onDispose {
-            speechRecognizer.destroy()
+            recognizer?.destroy()
         }
     }
 
@@ -139,13 +174,21 @@ fun ChatInputBar(
         }
     }
 
-    // Microphone permission launcher
+    // Fix #5: Microphone permission launcher – only start listening after permission is granted
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            startListening(context, speechRecognizer)
-            isListening = true
+            speechRecognizer.value?.let { recognizer ->
+                startListening(context, recognizer)
+                isListening = true
+            }
+        } else {
+            Toast.makeText(
+                context,
+                "Microphone permission is required for voice input.",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -171,8 +214,9 @@ fun ChatInputBar(
                             selected = false,
                             onClick = { attachments.removeAt(index) },
                             label = {
+                                // Fix #6: Show file size in attachment chips
                                 Text(
-                                    text = attachment.name,
+                                    text = "${attachment.name} (${formatFileSize(attachment.sizeBytes)})",
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -213,45 +257,48 @@ fun ChatInputBar(
                     )
                 )
 
-                // Voice input button
-                if (isListening) {
-                    // Pulsing indicator while recording
-                    val infiniteTransition = rememberInfiniteTransition(label = "mic_pulse")
-                    val pulseAlpha by infiniteTransition.animateFloat(
-                        initialValue = 0.4f,
-                        targetValue = 1f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(500, easing = EaseInOut),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "pulse_alpha"
-                    )
-                    FilledIconButton(
-                        onClick = {
-                            speechRecognizer.stopListening()
-                            isListening = false
-                        },
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.error.copy(alpha = pulseAlpha),
-                            contentColor = MaterialTheme.colorScheme.onError
+                // Fix #1: Only show voice input button if speech recognition is available
+                if (isSpeechAvailable) {
+                    if (isListening) {
+                        // Pulsing indicator while recording
+                        val infiniteTransition = rememberInfiniteTransition(label = "mic_pulse")
+                        val pulseAlpha by infiniteTransition.animateFloat(
+                            initialValue = 0.4f,
+                            targetValue = 1f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(500, easing = EaseInOut),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "pulse_alpha"
                         )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Stop recording"
-                        )
-                    }
-                } else {
-                    IconButton(
-                        onClick = {
-                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        FilledIconButton(
+                            onClick = {
+                                speechRecognizer.value?.stopListening()
+                                isListening = false
+                            },
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.error.copy(alpha = pulseAlpha),
+                                contentColor = MaterialTheme.colorScheme.onError
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Stop recording"
+                            )
                         }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Voice input",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    } else {
+                        IconButton(
+                            onClick = {
+                                // Fix #5: Request permission before starting recognition
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Voice input",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
@@ -344,9 +391,19 @@ private fun sendWithAttachments(
 private fun readFileContent(context: Context, uri: Uri): String? {
     return try {
         val mimeType = context.contentResolver.getType(uri) ?: ""
+
+        // Fix #2: Check file size before reading
+        val fileSize = getFileSize(context, uri)
+        if (fileSize > MAX_FILE_SIZE_BYTES) {
+            return null
+        }
+
         if (mimeType.startsWith("image/")) {
-            // For images, return a placeholder indicating the image URI
-            "[Image: $uri]"
+            // Fix #3: Read image bytes and encode to base64 for multimodal API calls
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+            val bytes = inputStream.use { it.readBytes() }
+            val base64String = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            "data:$mimeType;base64,$base64String"
         } else {
             // For text files, read content
             val inputStream = context.contentResolver.openInputStream(uri) ?: return null
@@ -373,13 +430,43 @@ private fun getFileName(context: Context, uri: Uri): String {
     val cursor = context.contentResolver.query(uri, null, null, null, null)
     cursor?.use {
         if (it.moveToFirst()) {
-            val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
             if (nameIndex >= 0) {
                 name = it.getString(nameIndex) ?: "file"
             }
         }
     }
     return name
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Get file size from URI
+// ---------------------------------------------------------------------------
+
+private fun getFileSize(context: Context, uri: Uri): Long {
+    var size = 0L
+    val cursor = context.contentResolver.query(uri, null, null, null, null)
+    cursor?.use {
+        if (it.moveToFirst()) {
+            val sizeIndex = it.getColumnIndex(OpenableColumns.SIZE)
+            if (sizeIndex >= 0) {
+                size = it.getLong(sizeIndex)
+            }
+        }
+    }
+    return size
+}
+
+// ---------------------------------------------------------------------------
+// Helper: Format file size for display
+// ---------------------------------------------------------------------------
+
+private fun formatFileSize(bytes: Long): String {
+    return when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1_048_576 -> "${bytes / 1024} KB"
+        else -> "${"%.1f".format(bytes / 1_048_576.0)} MB"
+    }
 }
 
 // ---------------------------------------------------------------------------

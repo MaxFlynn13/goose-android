@@ -17,6 +17,7 @@ import io.github.gooseandroid.network.CloudApiClient
 import io.github.gooseandroid.network.LocalModelClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -36,7 +37,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     companion object {
         private const val TAG = "ChatViewModel"
 
-        val PROVIDER_MODELS = CloudApiClient.PROVIDER_MODELS
+        val PROVIDER_MODELS: Map<String, List<String>> = PROVIDER_CATALOG
+            .associate { it.id to it.models.map { m -> m.id } }
     }
 
     private val appContext = application.applicationContext
@@ -77,12 +79,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingPrompt = MutableStateFlow<String?>(null)
     val pendingPrompt: StateFlow<String?> = _pendingPrompt.asStateFlow()
 
+    private val _exportedJson = MutableStateFlow<String?>(null)
+    val exportedJson: StateFlow<String?> = _exportedJson.asStateFlow()
+
     val tokenCount: StateFlow<Int> = _messages
         .map { msgs -> msgs.sumOf { it.content.length } / 4 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
     private var acpClient: AcpClient? = null
     private var streamingJob: Job? = null
+    private var notificationJob: Job? = null
     private var activeSystemPrompt: String = ""
 
     // ─── Initialization ─────────────────────────────────────────────────────────
@@ -159,7 +165,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val client = AcpClient(url)
             acpClient = client
 
-            launch {
+            // Fix #6: Cancel previous notification collector before starting a new one
+            notificationJob?.cancel()
+            notificationJob = launch {
                 client.notifications.collect { notification ->
                     acpNotificationHandler.handleAcpNotification(notification)
                 }
@@ -189,8 +197,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── Public Methods (delegating) ────────────────────────────────────────────
 
-    fun createNewSession(): String {
-        return kotlinx.coroutines.runBlocking { sessionManager.createNewSession() }
+    // Fix #1: No longer blocks the main thread. Generates session ID synchronously,
+    // updates state synchronously, then launches coroutine for I/O.
+    fun createNewSession() {
+        val newId = UUID.randomUUID().toString()
+        val newSession = SessionInfo(
+            id = newId,
+            title = "New Chat",
+            createdAt = System.currentTimeMillis()
+        )
+        _sessions.value = _sessions.value + newSession
+        _currentSessionId.value = newId
+        _messages.value = emptyList()
+        _toolCalls.value = emptyList()
+        _streamingContent.value = ""
+
+        viewModelScope.launch(Dispatchers.IO) {
+            sessionManager.persistNewSession(newSession)
+        }
     }
 
     fun switchSession(sessionId: String) {
@@ -205,12 +229,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { sessionManager.renameSession(sessionId, newTitle) }
     }
 
-    fun forkSession(sessionId: String): String {
-        return kotlinx.coroutines.runBlocking { sessionManager.forkSession(sessionId) }
+    // Fix #2: No longer blocks the main thread. Launches coroutine internally.
+    fun forkSession(sessionId: String) {
+        viewModelScope.launch {
+            val forkedId = sessionManager.forkSession(sessionId)
+            _currentSessionId.value = forkedId
+        }
     }
 
-    fun exportSession(sessionId: String): String {
-        return kotlinx.coroutines.runBlocking { sessionManager.exportSession(sessionId) }
+    // Fix #3: No longer blocks the main thread. Sets result in exportedJson StateFlow.
+    fun exportSession(sessionId: String) {
+        viewModelScope.launch {
+            val json = sessionManager.exportSession(sessionId)
+            _exportedJson.value = json
+        }
+    }
+
+    fun clearExportedJson() {
+        _exportedJson.value = null
     }
 
     fun prefillPrompt(prompt: String) {
@@ -475,10 +511,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun createStreamingCallbacks(assistantId: String): CloudApiClient.StreamingCallbacks {
         return object : CloudApiClient.StreamingCallbacks {
+            // Fix #5: Only update the last message efficiently instead of mapping the entire list
             override fun onToken(token: String) {
                 _streamingContent.value = token
-                _messages.value = _messages.value.map { msg ->
-                    if (msg.id == assistantId) msg.copy(content = token) else msg
+                val currentMessages = _messages.value
+                val lastIndex = currentMessages.lastIndex
+                if (lastIndex >= 0 && currentMessages[lastIndex].id == assistantId) {
+                    val updatedMsg = currentMessages[lastIndex].copy(content = token)
+                    _messages.value = currentMessages.toMutableList().apply {
+                        this[lastIndex] = updatedMsg
+                    }
+                } else {
+                    // Fallback: scan the list (should rarely happen)
+                    _messages.value = currentMessages.map { msg ->
+                        if (msg.id == assistantId) msg.copy(content = token) else msg
+                    }
                 }
             }
 
@@ -560,9 +607,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.value = currentMessages.map { if (it.id == lastAssistant.id) updated else it }
     }
 
+    // Fix #4: Use NonCancellable coroutine instead of runBlocking to avoid ANR
     override fun onCleared() {
         super.onCleared()
-        kotlinx.coroutines.runBlocking {
+        viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             sessionManager.saveCurrentSessionMessages()
             sessionManager.updateCurrentSessionMetadata()
         }

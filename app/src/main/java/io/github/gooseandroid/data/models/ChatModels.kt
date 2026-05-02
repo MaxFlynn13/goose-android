@@ -57,8 +57,13 @@ data class ProviderInfo(
     val apiKeySettingsKey: String,
     val models: List<ModelOption>,
     val requiresApiKey: Boolean = true,
-    val baseUrlSettingsKey: String? = null
-)
+    val baseUrlSettingsKey: String? = null,
+    val defaultBaseUrl: String = "",
+    val requiresModelName: Boolean = false
+) {
+    /** Whether this provider needs a base URL configured. */
+    val requiresBaseUrl: Boolean get() = baseUrlSettingsKey != null
+}
 
 data class ModelOption(
     val id: String,
@@ -126,6 +131,7 @@ val PROVIDER_CATALOG = listOf(
         apiKeySettingsKey = "",
         requiresApiKey = false,
         baseUrlSettingsKey = "ollama_base_url",
+        defaultBaseUrl = "http://localhost:11434",
         models = listOf(
             ModelOption("llama3.2", "Llama 3.2"),
             ModelOption("qwen2.5-coder", "Qwen 2.5 Coder"),
@@ -138,6 +144,7 @@ val PROVIDER_CATALOG = listOf(
         description = "Any OpenAI-compatible API endpoint",
         apiKeySettingsKey = "custom_provider_key",
         baseUrlSettingsKey = "custom_provider_url",
+        requiresModelName = true,
         models = listOf(
             ModelOption("custom", "Custom Model")
         )

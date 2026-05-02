@@ -12,7 +12,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BrokenImage
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
 
 /**
  * Renders an image from a URL or base64 data URI inline in the message.
@@ -23,15 +31,10 @@ fun InlineImage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val imageModel = if (url.startsWith("data:image")) {
-        url
-    } else {
-        url
-    }
 
     AsyncImage(
         model = ImageRequest.Builder(context)
-            .data(imageModel)
+            .data(url)
             .crossfade(true)
             .build(),
         contentDescription = "Inline image",
@@ -39,7 +42,23 @@ fun InlineImage(
             .fillMaxWidth()
             .heightIn(max = 300.dp)
             .clip(RoundedCornerShape(8.dp)),
-        contentScale = ContentScale.Fit
+        contentScale = ContentScale.Fit,
+        error = {
+            Box(
+                modifier = Modifier.size(48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.BrokenImage, contentDescription = "Failed to load image")
+            }
+        },
+        placeholder = {
+            Box(
+                modifier = Modifier.size(48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.Image, contentDescription = "Loading image")
+            }
+        }
     )
 }
 
@@ -57,8 +76,8 @@ fun extractImageUrls(content: String): List<String> {
         urls.add(match.groupValues[1])
     }
 
-    // Base64 data URIs in the text
-    val base64Regex = Regex("(data:image/[^;]+;base64,[A-Za-z0-9+/=]+)")
+    // Base64 data URIs in the text (limit base64 portion to 10MB worth of chars)
+    val base64Regex = Regex("(data:image/[^;]{1,20};base64,[A-Za-z0-9+/=]{20,14000000})")
     base64Regex.findAll(content).forEach { match ->
         val dataUri = match.groupValues[1]
         if (dataUri !in urls) {

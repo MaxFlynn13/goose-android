@@ -36,6 +36,7 @@ import io.github.gooseandroid.ui.projects.ProjectsScreen
 import io.github.gooseandroid.ui.settings.AppTheme
 import io.github.gooseandroid.ui.settings.AppearanceSettingsScreen
 import io.github.gooseandroid.ui.settings.SettingsScreen
+import io.github.gooseandroid.ui.settings.ThemeMode
 import io.github.gooseandroid.ui.skills.SkillsScreen
 
 /**
@@ -53,7 +54,7 @@ import io.github.gooseandroid.ui.skills.SkillsScreen
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GooseNavigation() {
+fun GooseNavigation(sharedText: String? = null) {
     val context = LocalContext.current
     val settingsStore = remember { SettingsStore(context) }
     val navController = rememberNavController()
@@ -63,6 +64,34 @@ fun GooseNavigation() {
 
     var panelOpen by remember { mutableStateOf(false) }
     var appTheme by remember { mutableStateOf(AppTheme()) }
+
+    // Load persisted theme from SettingsStore on first composition
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.flow.combine(
+            settingsStore.getString(SettingsKeys.THEME_MODE, "SYSTEM"),
+            settingsStore.getString(SettingsKeys.PRIMARY_COLOR, ""),
+            settingsStore.getString(SettingsKeys.SECONDARY_COLOR, ""),
+            settingsStore.getString(SettingsKeys.ACCENT_COLOR, ""),
+            settingsStore.getFloat(SettingsKeys.TEXT_SCALE, 1.0f)
+        ) { themeMode, primary, secondary, accent, textScale ->
+            AppTheme(
+                themeMode = try { ThemeMode.valueOf(themeMode) } catch (_: Exception) { ThemeMode.SYSTEM },
+                primaryColor = if (primary.isNotEmpty()) Color(primary.toLong(16)) else AppTheme().primaryColor,
+                secondaryColor = if (secondary.isNotEmpty()) Color(secondary.toLong(16)) else AppTheme().secondaryColor,
+                accentColor = if (accent.isNotEmpty()) Color(accent.toLong(16)) else AppTheme().accentColor,
+                textScale = textScale
+            )
+        }.collect { restored ->
+            appTheme = restored
+        }
+    }
+
+    // Handle shared text from other apps — prefill the chat prompt
+    LaunchedEffect(sharedText) {
+        if (!sharedText.isNullOrBlank()) {
+            chatViewModel.prefillPrompt(sharedText)
+        }
+    }
 
     // Read panel side from persisted DataStore settings
     val panelSideStr by settingsStore

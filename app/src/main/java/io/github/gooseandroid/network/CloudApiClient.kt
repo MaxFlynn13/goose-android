@@ -6,15 +6,20 @@ import io.github.gooseandroid.data.SettingsStore
 import io.github.gooseandroid.data.models.AttachmentInfo
 import io.github.gooseandroid.data.models.ChatMessage
 import io.github.gooseandroid.data.models.MessageRole
+import io.github.gooseandroid.data.models.PROVIDER_CATALOG
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Handles ALL cloud API streaming calls (Anthropic, OpenAI, Google, Mistral, OpenRouter, Custom).
@@ -24,18 +29,26 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
 
     companion object {
         private const val TAG = "CloudApiClient"
+        private const val MAX_RETRIES = 1
+        private const val RETRY_DELAY_MS = 1000L
 
-        val PROVIDER_MODELS = mapOf(
-            "anthropic" to listOf("claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"),
-            "openai" to listOf("gpt-4o", "gpt-4o-mini", "o3-mini"),
-            "google" to listOf("gemini-2.0-flash", "gemini-2.5-pro-preview-06-05"),
-            "mistral" to listOf("mistral-large-latest", "mistral-small-latest"),
-            "openrouter" to listOf(
-                "anthropic/claude-sonnet-4-20250514",
-                "openai/gpt-4o",
-                "google/gemini-2.0-flash-001"
-            )
-        )
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        val httpClient: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** Reference to the currently active streaming call, enabling cancellation. */
+    private val activeCall = AtomicReference<Call?>(null)
+
+    /**
+     * Cancel the currently active streaming call, if any.
+     */
+    fun cancelActiveCall() {
+        activeCall.getAndSet(null)?.cancel()
     }
 
     /**
@@ -96,24 +109,21 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
 
     /**
      * Get the API key for a given provider from settings.
+     * Uses PROVIDER_CATALOG as the single source of truth for settings key mapping.
      */
     suspend fun getApiKeyForProvider(provider: String): String {
-        return when (provider) {
-            "anthropic" -> settingsStore.getString(SettingsKeys.ANTHROPIC_API_KEY).first()
-            "openai" -> settingsStore.getString(SettingsKeys.OPENAI_API_KEY).first()
-            "google" -> settingsStore.getString(SettingsKeys.GOOGLE_API_KEY).first()
-            "mistral" -> settingsStore.getString(SettingsKeys.MISTRAL_API_KEY).first()
-            "openrouter" -> settingsStore.getString(SettingsKeys.OPENROUTER_API_KEY).first()
-            "custom" -> settingsStore.getString(SettingsKeys.CUSTOM_PROVIDER_KEY).first()
-            else -> ""
-        }
+        val providerInfo = PROVIDER_CATALOG.find { it.id == provider } ?: return ""
+        val settingsKey = providerInfo.apiKeySettingsKey
+        if (settingsKey.isBlank()) return ""
+        return settingsStore.getString(settingsKey).first()
     }
 
     /**
-     * Get the default model for a provider.
+     * Get the default model for a provider from the shared PROVIDER_CATALOG.
      */
     fun getDefaultModel(provider: String): String {
-        return PROVIDER_MODELS[provider]?.firstOrNull() ?: "gpt-4o"
+        return PROVIDER_CATALOG.find { it.id == provider }
+            ?.models?.firstOrNull()?.id ?: "gpt-4o"
     }
 
     /**
@@ -132,6 +142,37 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
                 }
                 role to msg.content
             }
+    }
+
+    /**
+     * Execute an OkHttp call with a single retry on connection errors.
+     * Stores the active call reference for cancellation support.
+     * Returns the response (caller must close it).
+     */
+    private fun executeWithRetry(request: Request): okhttp3.Response {
+        var lastException: IOException? = null
+        for (attempt in 0..MAX_RETRIES) {
+            if (attempt > 0) {
+                Log.d(TAG, "Retrying request (attempt ${attempt + 1})...")
+                Thread.sleep(RETRY_DELAY_MS)
+            }
+            val call = httpClient.newCall(request)
+            activeCall.set(call)
+            try {
+                val response = call.execute()
+                if (response.isSuccessful) {
+                    return response
+                }
+                // Non-retryable HTTP errors (4xx, 5xx that aren't connection issues)
+                // Return immediately so caller can read the error body
+                return response
+            } catch (e: IOException) {
+                lastException = e
+                Log.w(TAG, "Request failed (attempt ${attempt + 1}): ${e.message}")
+                // Continue to retry on connection errors
+            }
+        }
+        throw lastException ?: IOException("Request failed after ${MAX_RETRIES + 1} attempts")
     }
 
     /**
@@ -166,32 +207,27 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
                     body.put("system", activeSystemPrompt)
                 }
 
-                val url = URL("https://api.anthropic.com/v1/messages")
-                val conn = url.openConnection() as HttpURLConnection
-                try {
-                    conn.requestMethod = "POST"
-                    conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("x-api-key", apiKey)
-                    conn.setRequestProperty("anthropic-version", "2023-06-01")
-                    conn.connectTimeout = 60_000
-                    conn.readTimeout = 120_000
-                    conn.doOutput = true
-                    conn.outputStream.use { it.write(body.toString().toByteArray()) }
+                val request = Request.Builder()
+                    .url("https://api.anthropic.com/v1/messages")
+                    .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .header("Content-Type", "application/json")
+                    .header("x-api-key", apiKey)
+                    .header("anthropic-version", "2023-06-01")
+                    .build()
 
-                    val responseCode = conn.responseCode
-                    if (responseCode != 200) {
-                        val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
-                        throw Exception("Anthropic API error ($responseCode): $error")
+                val response = executeWithRetry(request)
+                response.use { resp ->
+                    if (!resp.isSuccessful) {
+                        val error = resp.body?.string() ?: "HTTP ${resp.code}"
+                        throw Exception("Anthropic API error (${resp.code}): $error")
                     }
 
-                    val responseBody = conn.inputStream.bufferedReader().readText()
+                    val responseBody = resp.body?.string() ?: ""
                     val json = JSONObject(responseBody)
                     val contentArray = json.optJSONArray("content")
                     if (contentArray != null && contentArray.length() > 0) {
                         contentArray.getJSONObject(0).optString("text", "")
                     } else ""
-                } finally {
-                    conn.disconnect()
                 }
             }
             "google" -> {
@@ -223,25 +259,21 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
                 val body = JSONObject()
                 body.put("contents", contentsArray)
 
-                val url = URL(
-                    "https://generativelanguage.googleapis.com/v1beta/models/$resolvedModel:generateContent?key=$apiKey"
-                )
-                val conn = url.openConnection() as HttpURLConnection
-                try {
-                    conn.requestMethod = "POST"
-                    conn.setRequestProperty("Content-Type", "application/json")
-                    conn.connectTimeout = 60_000
-                    conn.readTimeout = 120_000
-                    conn.doOutput = true
-                    conn.outputStream.use { it.write(body.toString().toByteArray()) }
+                val request = Request.Builder()
+                    .url("https://generativelanguage.googleapis.com/v1beta/models/$resolvedModel:generateContent")
+                    .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .header("Content-Type", "application/json")
+                    .header("x-goog-api-key", apiKey)
+                    .build()
 
-                    val responseCode = conn.responseCode
-                    if (responseCode != 200) {
-                        val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
-                        throw Exception("Google AI error ($responseCode): $error")
+                val response = executeWithRetry(request)
+                response.use { resp ->
+                    if (!resp.isSuccessful) {
+                        val error = resp.body?.string() ?: "HTTP ${resp.code}"
+                        throw Exception("Google AI error (${resp.code}): $error")
                     }
 
-                    val responseBody = conn.inputStream.bufferedReader().readText()
+                    val responseBody = resp.body?.string() ?: ""
                     val json = JSONObject(responseBody)
                     val candidates = json.optJSONArray("candidates")
                     if (candidates != null && candidates.length() > 0) {
@@ -252,8 +284,6 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
                             parts.getJSONObject(0).optString("text", "")
                         } else ""
                     } else ""
-                } finally {
-                    conn.disconnect()
                 }
             }
             else -> {
@@ -292,27 +322,23 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
                     else -> "https://api.openai.com/v1/chat/completions"
                 }
 
-                val url = URL(endpoint)
-                val conn = url.openConnection() as HttpURLConnection
-                try {
-                    conn.requestMethod = "POST"
-                    conn.setRequestProperty("Content-Type", "application/json")
-                    conn.setRequestProperty("Authorization", "Bearer $apiKey")
-                    if (provider == "openrouter") {
-                        conn.setRequestProperty("HTTP-Referer", "https://github.com/MaxFlynn13/goose-android")
-                    }
-                    conn.connectTimeout = 60_000
-                    conn.readTimeout = 120_000
-                    conn.doOutput = true
-                    conn.outputStream.use { it.write(body.toString().toByteArray()) }
+                val requestBuilder = Request.Builder()
+                    .url(endpoint)
+                    .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer $apiKey")
+                if (provider == "openrouter") {
+                    requestBuilder.header("HTTP-Referer", "https://github.com/MaxFlynn13/goose-android")
+                }
 
-                    val responseCode = conn.responseCode
-                    if (responseCode != 200) {
-                        val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
-                        throw Exception("API error ($responseCode): $error")
+                val response = executeWithRetry(requestBuilder.build())
+                response.use { resp ->
+                    if (!resp.isSuccessful) {
+                        val error = resp.body?.string() ?: "HTTP ${resp.code}"
+                        throw Exception("API error (${resp.code}): $error")
                     }
 
-                    val responseBody = conn.inputStream.bufferedReader().readText()
+                    val responseBody = resp.body?.string() ?: ""
                     val json = JSONObject(responseBody)
                     val choices = json.optJSONArray("choices")
                     if (choices != null && choices.length() > 0) {
@@ -320,8 +346,6 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
                         val message = firstChoice.optJSONObject("message")
                         message?.optString("content", "") ?: ""
                     } else ""
-                } finally {
-                    conn.disconnect()
                 }
             }
         }
@@ -387,31 +411,26 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
             body.put("system", activeSystemPrompt)
         }
 
-        val url = URL("https://api.anthropic.com/v1/messages")
-        val conn = url.openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("Accept", "text/event-stream")
-            conn.setRequestProperty("x-api-key", apiKey)
-            conn.setRequestProperty("anthropic-version", "2023-06-01")
-            conn.connectTimeout = 60_000
-            conn.readTimeout = 120_000
-            conn.doOutput = true
+        val request = Request.Builder()
+            .url("https://api.anthropic.com/v1/messages")
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("x-api-key", apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .build()
 
-            conn.outputStream.use { it.write(body.toString().toByteArray()) }
-
-            val responseCode = conn.responseCode
-            if (responseCode != 200) {
-                val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
-                throw Exception("Anthropic API error ($responseCode): $error")
+        val response = executeWithRetry(request)
+        response.use { resp ->
+            if (!resp.isSuccessful) {
+                val error = resp.body?.string() ?: "HTTP ${resp.code}"
+                throw Exception("Anthropic API error (${resp.code}): $error")
             }
 
-            val reader = BufferedReader(InputStreamReader(conn.inputStream))
             val accumulated = StringBuilder()
-
-            reader.useLines { lines ->
-                for (line in lines) {
+            resp.body?.source()?.let { source ->
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
                     if (!line.startsWith("data: ")) continue
                     val data = line.removePrefix("data: ").trim()
                     if (data == "[DONE]") break
@@ -443,8 +462,6 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
             }
 
             callbacks.onComplete(accumulated.toString())
-        } finally {
-            conn.disconnect()
         }
     }
 
@@ -508,33 +525,27 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
         body.put("stream", true)
         body.put("messages", messagesArray)
 
-        val url = URL(endpoint)
-        val conn = url.openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("Accept", "text/event-stream")
-            conn.setRequestProperty("Authorization", "Bearer $apiKey")
-            for ((key, value) in extraHeaders) {
-                conn.setRequestProperty(key, value)
-            }
-            conn.connectTimeout = 60_000
-            conn.readTimeout = 120_000
-            conn.doOutput = true
+        val requestBuilder = Request.Builder()
+            .url(endpoint)
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("Authorization", "Bearer $apiKey")
+        for ((key, value) in extraHeaders) {
+            requestBuilder.header(key, value)
+        }
 
-            conn.outputStream.use { it.write(body.toString().toByteArray()) }
-
-            val responseCode = conn.responseCode
-            if (responseCode != 200) {
-                val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
-                throw Exception("API error ($responseCode): $error")
+        val response = executeWithRetry(requestBuilder.build())
+        response.use { resp ->
+            if (!resp.isSuccessful) {
+                val error = resp.body?.string() ?: "HTTP ${resp.code}"
+                throw Exception("API error (${resp.code}): $error")
             }
 
-            val reader = BufferedReader(InputStreamReader(conn.inputStream))
             val accumulated = StringBuilder()
-
-            reader.useLines { lines ->
-                for (line in lines) {
+            resp.body?.source()?.let { source ->
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
                     if (!line.startsWith("data: ")) continue
                     val data = line.removePrefix("data: ").trim()
                     if (data == "[DONE]") break
@@ -562,8 +573,6 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
             }
 
             callbacks.onComplete(accumulated.toString())
-        } finally {
-            conn.disconnect()
         }
     }
 
@@ -633,31 +642,25 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
         val body = JSONObject()
         body.put("contents", contentsArray)
 
-        val url = URL(
-            "https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse&key=$apiKey"
-        )
-        val conn = url.openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("Accept", "text/event-stream")
-            conn.connectTimeout = 60_000
-            conn.readTimeout = 120_000
-            conn.doOutput = true
+        val request = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:streamGenerateContent?alt=sse")
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .header("x-goog-api-key", apiKey)
+            .build()
 
-            conn.outputStream.use { it.write(body.toString().toByteArray()) }
-
-            val responseCode = conn.responseCode
-            if (responseCode != 200) {
-                val error = conn.errorStream?.bufferedReader()?.readText() ?: "HTTP $responseCode"
-                throw Exception("Google AI error ($responseCode): $error")
+        val response = executeWithRetry(request)
+        response.use { resp ->
+            if (!resp.isSuccessful) {
+                val error = resp.body?.string() ?: "HTTP ${resp.code}"
+                throw Exception("Google AI error (${resp.code}): $error")
             }
 
-            val reader = BufferedReader(InputStreamReader(conn.inputStream))
             val accumulated = StringBuilder()
-
-            reader.useLines { lines ->
-                for (line in lines) {
+            resp.body?.source()?.let { source ->
+                while (!source.exhausted()) {
+                    val line = source.readUtf8Line() ?: break
                     if (!line.startsWith("data: ")) continue
                     val data = line.removePrefix("data: ").trim()
                     if (data == "[DONE]" || data.isEmpty()) continue
@@ -686,8 +689,6 @@ class CloudApiClient(private val settingsStore: SettingsStore) {
             }
 
             callbacks.onComplete(accumulated.toString())
-        } finally {
-            conn.disconnect()
         }
     }
 }

@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.util.Log
 import kotlinx.coroutines.*
 import java.io.File
+import java.io.IOException
 import java.net.ServerSocket
 
 /**
@@ -28,11 +29,18 @@ class GooseService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CONNECT_TIMEOUT_MS = 30_000L
         private const val CONNECT_RETRY_DELAY_MS = 100L
+        /** Minimum binary size in bytes; anything smaller is a build placeholder. */
+        private const val MIN_BINARY_SIZE_BYTES = 1000L
+        /** Maximum number of full start-up retries when waitForServer times out. */
+        private const val MAX_SERVER_RETRIES = 2
     }
 
     private var gooseProcess: Process? = null
     private var port: Int = 0
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /** Reference to the local LiteRT server so we can shut it down in onDestroy(). */
+    private var liteRTServer: LiteRTInferenceServer? = null
 
     // Binder for Activity to get port info
     inner class LocalBinder : Binder() {
@@ -62,6 +70,7 @@ class GooseService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         stopGoose()
+        stopLocalServer()
         scope.cancel()
     }
 
@@ -109,23 +118,33 @@ class GooseService : Service() {
 
             gooseProcess = processBuilder.start()
 
-            // Log stderr in background
+            // Log stderr in background with proper error handling (#3)
             scope.launch {
-                gooseProcess?.errorStream?.bufferedReader()?.useLines { lines ->
-                    lines.forEach { line ->
-                        Log.d(TAG, "[goose stderr] $line")
+                try {
+                    gooseProcess?.errorStream?.bufferedReader()?.useLines { lines ->
+                        lines.forEach { line ->
+                            Log.d(TAG, "[goose stderr] $line")
+                        }
                     }
+                } catch (e: IOException) {
+                    Log.w(TAG, "Error reading goose stderr stream", e)
                 }
             }
 
-            // Wait for server to be ready
-            val ready = waitForServer(port)
+            // Wait for server with retry logic (#4)
+            var ready = false
+            for (attempt in 1..MAX_SERVER_RETRIES) {
+                ready = waitForServer(port)
+                if (ready) break
+                Log.w(TAG, "waitForServer attempt $attempt/$MAX_SERVER_RETRIES timed out, retrying...")
+            }
+
             if (ready) {
                 GoosePortHolder.port = port
                 Log.i(TAG, "Goose is ready on port $port")
                 updateNotification("Goose is running on port $port")
             } else {
-                Log.e(TAG, "Goose failed to become ready within timeout")
+                Log.e(TAG, "Goose failed to become ready after $MAX_SERVER_RETRIES attempts")
                 updateNotification("Goose failed to start")
                 stopGoose()
             }
@@ -143,8 +162,9 @@ class GooseService : Service() {
      */
     private suspend fun startLocalOnlyMode() {
         val modelManager = LocalModelManager(this)
-        val liteRTServer = LiteRTInferenceServer(modelManager)
-        port = liteRTServer.start()
+        val server = LiteRTInferenceServer(modelManager)
+        liteRTServer = server                       // (#1) store reference for cleanup
+        port = server.start()
         GoosePortHolder.port = port
         GoosePortHolder.localOnlyMode = true
         Log.i(TAG, "Local-only mode active on port $port")
@@ -162,8 +182,8 @@ class GooseService : Service() {
             return null
         }
 
-        // Check if it's a real binary (not the 4-byte placeholder from smoke test)
-        if (binary.length() < 1000) {
+        // Check if it's a real binary (not the placeholder from smoke test) (#5)
+        if (binary.length() < MIN_BINARY_SIZE_BYTES) {
             Log.w(TAG, "Binary too small (${binary.length()} bytes) - likely placeholder")
             return null
         }
@@ -227,8 +247,8 @@ class GooseService : Service() {
             Log.i(TAG, "Stopping goose process")
             process.destroy()
 
-            // Give it 5 seconds to shut down gracefully
-            scope.launch {
+            // Force-kill in a NonCancellable context so scope.cancel() won't prevent it (#2)
+            scope.launch(NonCancellable) {
                 delay(5000)
                 if (process.isAlive) {
                     Log.w(TAG, "Force killing goose process")
@@ -237,6 +257,21 @@ class GooseService : Service() {
             }
         }
         gooseProcess = null
+    }
+
+    /**
+     * Shuts down the local LiteRT inference server if it is running. (#7)
+     */
+    private fun stopLocalServer() {
+        liteRTServer?.let { server ->
+            Log.i(TAG, "Stopping local LiteRT inference server")
+            try {
+                server.stop()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error stopping LiteRT server", e)
+            }
+        }
+        liteRTServer = null
     }
 
     private fun findFreePort(): Int {
@@ -269,7 +304,7 @@ class GooseService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Goose")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_menu_manage)
+            .setSmallIcon(R.drawable.ic_notification)   // (#6) use proper app icon
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()

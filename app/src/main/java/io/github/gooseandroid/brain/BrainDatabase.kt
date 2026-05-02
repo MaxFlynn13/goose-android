@@ -30,7 +30,7 @@ import java.util.UUID
  *
  * Export format is portable — download from one device, upload to another.
  */
-class BrainDatabase(context: Context) : SQLiteOpenHelper(
+class BrainDatabase private constructor(context: Context) : SQLiteOpenHelper(
     context, DATABASE_NAME, null, DATABASE_VERSION
 ) {
     companion object {
@@ -41,6 +41,12 @@ class BrainDatabase(context: Context) : SQLiteOpenHelper(
         private const val TABLE_NODES = "nodes"
         private const val TABLE_TAGS = "tags"
         private const val TABLE_NODE_TAGS = "node_tags"
+
+        @Volatile private var instance: BrainDatabase? = null
+        fun getInstance(context: Context): BrainDatabase =
+            instance ?: synchronized(this) {
+                instance ?: BrainDatabase(context.applicationContext).also { instance = it }
+            }
     }
 
     private val json = Json {
@@ -210,13 +216,17 @@ class BrainDatabase(context: Context) : SQLiteOpenHelper(
 
     suspend fun getAllNodes(): List<BrainNode> = withContext(Dispatchers.IO) {
         val db = readableDatabase
+
+        // Load all tags in one query to avoid N+1
+        val allNodeTags = loadAllNodeTags(db)
+
         val cursor = db.rawQuery(
             "SELECT * FROM $TABLE_NODES ORDER BY pinned DESC, updated_at DESC", null
         )
         val nodes = mutableListOf<BrainNode>()
         cursor.use {
             while (it.moveToNext()) {
-                cursorToNode(db, it)?.let { node -> nodes.add(node) }
+                cursorToNodeWithTags(it, allNodeTags)?.let { node -> nodes.add(node) }
             }
         }
         nodes
@@ -443,6 +453,53 @@ class BrainDatabase(context: Context) : SQLiteOpenHelper(
         }
         db.insert(TABLE_TAGS, null, values)
         return id
+    }
+
+    /**
+     * Load all node→tags mappings in a single query to avoid N+1.
+     * Returns a map of nodeId → list of tag names.
+     */
+    private fun loadAllNodeTags(db: SQLiteDatabase): Map<String, List<String>> {
+        val result = mutableMapOf<String, MutableList<String>>()
+        val cursor = db.rawQuery("""
+            SELECT nt.node_id, t.name FROM $TABLE_NODE_TAGS nt
+            INNER JOIN $TABLE_TAGS t ON nt.tag_id = t.id
+        """, null)
+        cursor.use {
+            while (it.moveToNext()) {
+                val nodeId = it.getString(0)
+                val tagName = it.getString(1)
+                result.getOrPut(nodeId) { mutableListOf() }.add(tagName)
+            }
+        }
+        return result
+    }
+
+    /**
+     * Convert cursor row to BrainNode using a pre-loaded tags map (avoids N+1).
+     */
+    private fun cursorToNodeWithTags(
+        cursor: android.database.Cursor,
+        allNodeTags: Map<String, List<String>>
+    ): BrainNode? {
+        return try {
+            val id = cursor.getString(cursor.getColumnIndexOrThrow("id"))
+            val tags = allNodeTags[id] ?: emptyList()
+            BrainNode(
+                id = id,
+                title = cursor.getString(cursor.getColumnIndexOrThrow("title")),
+                content = cursor.getString(cursor.getColumnIndexOrThrow("content")),
+                type = NodeType.fromValue(cursor.getString(cursor.getColumnIndexOrThrow("node_type"))),
+                tags = tags,
+                createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
+                updatedAt = cursor.getLong(cursor.getColumnIndexOrThrow("updated_at")),
+                pinned = cursor.getInt(cursor.getColumnIndexOrThrow("pinned")) == 1,
+                source = cursor.getString(cursor.getColumnIndexOrThrow("source"))
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading node from cursor", e)
+            null
+        }
     }
 
     private fun cursorToNode(db: SQLiteDatabase, cursor: android.database.Cursor): BrainNode? {

@@ -9,6 +9,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Manages local LLM models — download, storage, and lifecycle.
@@ -29,6 +30,9 @@ class LocalModelManager(private val context: Context) {
         // Singleton download scope — survives screen navigation
         private val downloadScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         private val _globalDownloads = MutableStateFlow<Map<String, DownloadState>>(emptyMap())
+
+        // Track download jobs for proper cancellation
+        private val downloadJobs = ConcurrentHashMap<String, Job>()
 
         /**
          * Model catalog — using GGUF models from ungated HuggingFace repos.
@@ -193,7 +197,7 @@ class LocalModelManager(private val context: Context) {
         val currentState = _globalDownloads.value[model.id]
         if (currentState is DownloadState.Downloading) return
 
-        scope.launch {
+        val job = scope.launch {
             val outputFile = File(modelsDir, model.filename)
             val tempFile = File(modelsDir, "${model.filename}.tmp")
 
@@ -206,13 +210,14 @@ class LocalModelManager(private val context: Context) {
                 var responseCode: Int
                 var redirectCount = 0
 
-                // Follow redirects (HuggingFace uses 302 → CDN)
+                // Follow redirects manually (instanceFollowRedirects = false to avoid conflict)
                 do {
+                    ensureActive()
                     val url = URL(currentUrl)
                     connection = url.openConnection() as HttpURLConnection
                     connection.connectTimeout = 30_000
                     connection.readTimeout = 60_000
-                    connection.instanceFollowRedirects = true
+                    connection.instanceFollowRedirects = false
                     connection.setRequestProperty("User-Agent", "GooseAndroid/0.1.0")
 
                     // Support resume if temp file exists
@@ -247,21 +252,35 @@ class LocalModelManager(private val context: Context) {
                 var bytesRead: Int
                 var totalRead = if (tempFile.exists()) tempFile.length() else 0L
 
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    outputStream.write(buffer, 0, bytesRead)
-                    totalRead += bytesRead
+                try {
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        ensureActive()
+                        outputStream.write(buffer, 0, bytesRead)
+                        totalRead += bytesRead
 
-                    val progress = if (totalBytes > 0) {
-                        (totalRead.toFloat() / totalBytes).coerceIn(0f, 1f)
-                    } else 0f
+                        val progress = if (totalBytes > 0) {
+                            (totalRead.toFloat() / totalBytes).coerceIn(0f, 1f)
+                        } else 0f
 
-                    _globalDownloads.value = _globalDownloads.value + (model.id to DownloadState.Downloading(progress))
+                        _globalDownloads.value = _globalDownloads.value + (model.id to DownloadState.Downloading(progress))
+                    }
+                } finally {
+                    outputStream.flush()
+                    outputStream.close()
+                    inputStream.close()
+                    connection.disconnect()
                 }
 
-                outputStream.flush()
-                outputStream.close()
-                inputStream.close()
-                connection.disconnect()
+                // Verify file size is > 0 and matches expected size if known
+                val downloadedSize = tempFile.length()
+                if (downloadedSize == 0L) {
+                    tempFile.delete()
+                    throw Exception("Downloaded file is empty (0 bytes)")
+                }
+                if (model.sizeBytes > 0 && downloadedSize < model.sizeBytes * 0.9) {
+                    // Allow 10% tolerance since catalog sizes are approximate
+                    Log.w(TAG, "Downloaded size ($downloadedSize) is significantly smaller than expected (${model.sizeBytes})")
+                }
 
                 // Rename temp to final
                 tempFile.renameTo(outputFile)
@@ -269,21 +288,30 @@ class LocalModelManager(private val context: Context) {
                 Log.i(TAG, "Download complete: ${model.name} (${outputFile.length()} bytes)")
                 _globalDownloads.value = _globalDownloads.value + (model.id to DownloadState.Complete)
 
+            } catch (e: CancellationException) {
+                Log.i(TAG, "Download cancelled: ${model.name}")
+                _globalDownloads.value = _globalDownloads.value - model.id
+                // Don't delete temp file — allows resume on retry
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Download failed: ${model.name}", e)
                 _globalDownloads.value = _globalDownloads.value + (model.id to DownloadState.Error(e.message ?: "Unknown error"))
                 // Don't delete temp file — allows resume on retry
+            } finally {
+                downloadJobs.remove(model.id)
             }
         }
+
+        downloadJobs[model.id] = job
     }
 
     /**
      * Cancel an in-progress download.
      */
     fun cancelDownload(model: ModelInfo) {
+        val job = downloadJobs.remove(model.id)
+        job?.cancel()
         _globalDownloads.value = _globalDownloads.value - model.id
-        // The coroutine will fail on next write since we're not tracking the job
-        // TODO: Track individual download jobs for proper cancellation
         val tempFile = File(modelsDir, "${model.filename}.tmp")
         tempFile.delete()
     }

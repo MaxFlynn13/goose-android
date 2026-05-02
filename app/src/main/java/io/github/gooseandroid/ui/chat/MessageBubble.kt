@@ -191,7 +191,8 @@ fun SystemBubble(
 }
 
 // ---------------------------------------------------------------------------
-// Streaming Bubble (animated text appearing progressively)
+// Streaming Bubble — displays content directly (streaming from API provides
+// the progressive effect; no character-by-character animation needed)
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -199,23 +200,6 @@ fun StreamingBubble(
     content: String,
     modifier: Modifier = Modifier
 ) {
-    var displayedLength by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(content) {
-        while (displayedLength < content.length) {
-            displayedLength = (displayedLength + 1).coerceAtMost(content.length)
-            delay(12L)
-        }
-    }
-
-    LaunchedEffect(content.length < displayedLength) {
-        if (content.length < displayedLength) {
-            displayedLength = content.length
-        }
-    }
-
-    val visibleText = content.take(displayedLength)
-
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start
@@ -234,7 +218,7 @@ fun StreamingBubble(
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 MarkdownContent(
-                    content = visibleText,
+                    content = content,
                     textColor = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -626,7 +610,11 @@ private fun findStringEnd(code: String, start: Int, quote: Char): Int {
     var i = start + 1
     while (i < code.length) {
         if (code[i] == '\\') {
-            i += 2
+            if (i + 1 < code.length) {
+                i += 2
+            } else {
+                i++
+            }
             continue
         }
         if (code[i] == quote) {

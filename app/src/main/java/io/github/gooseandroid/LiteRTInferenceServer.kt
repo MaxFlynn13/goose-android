@@ -40,16 +40,19 @@ class LiteRTInferenceServer(
     companion object {
         private const val TAG = "LiteRTServer"
         private const val DEFAULT_PORT = 11435 // Similar to Ollama's 11434
+        private const val MAX_BODY_SIZE = 10 * 1024 * 1024 // 10 MB
     }
 
     private var serverSocket: ServerSocket? = null
     private var serverJob: Job? = null
     private var port: Int = DEFAULT_PORT
+    @Volatile
+    private var running = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun getPort(): Int = port
 
-    fun isRunning(): Boolean = serverSocket?.isClosed == false
+    fun isRunning(): Boolean = running && serverSocket?.isClosed == false
 
     /**
      * Start the local inference server.
@@ -58,6 +61,7 @@ class LiteRTInferenceServer(
         if (isRunning()) return port
 
         port = findFreePort()
+        running = true
         Log.i(TAG, "Starting LiteRT inference server on port $port")
 
         serverJob = scope.launch {
@@ -65,14 +69,16 @@ class LiteRTInferenceServer(
                 serverSocket = ServerSocket(port)
                 Log.i(TAG, "LiteRT server listening on port $port")
 
-                while (isActive) {
+                while (isActive && running) {
                     val client = serverSocket?.accept() ?: break
                     launch { handleClient(client) }
                 }
             } catch (e: Exception) {
-                if (isActive) {
+                if (isActive && running) {
                     Log.e(TAG, "Server error", e)
                 }
+            } finally {
+                running = false
             }
         }
 
@@ -84,8 +90,13 @@ class LiteRTInferenceServer(
      */
     fun stop() {
         Log.i(TAG, "Stopping LiteRT inference server")
+        running = false
         serverJob?.cancel()
-        serverSocket?.close()
+        try {
+            serverSocket?.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error closing server socket", e)
+        }
         serverSocket = null
     }
 
@@ -110,12 +121,23 @@ class LiteRTInferenceServer(
                     line = reader.readLine()
                 }
 
-                // Read body if present
+                // Read body if present, enforcing max body size
                 val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
+                if (contentLength > MAX_BODY_SIZE) {
+                    val errorResponse = httpResponse(413, """{"error":"Request body too large. Max size is ${MAX_BODY_SIZE / (1024 * 1024)}MB."}""")
+                    writer.write(errorResponse.toByteArray())
+                    writer.flush()
+                    return@withContext
+                }
                 val body = if (contentLength > 0) {
                     val chars = CharArray(contentLength)
-                    reader.read(chars, 0, contentLength)
-                    String(chars)
+                    var totalRead = 0
+                    while (totalRead < contentLength) {
+                        val read = reader.read(chars, totalRead, contentLength - totalRead)
+                        if (read == -1) break
+                        totalRead += read
+                    }
+                    String(chars, 0, totalRead)
                 } else ""
 
                 // Route request
@@ -181,12 +203,14 @@ class LiteRTInferenceServer(
         val statusText = when (status) {
             200 -> "OK"
             404 -> "Not Found"
+            413 -> "Payload Too Large"
             500 -> "Internal Server Error"
             else -> "Unknown"
         }
+        val bodyBytes = body.toByteArray(Charsets.UTF_8).size
         return "HTTP/1.1 $status $statusText\r\n" +
                 "Content-Type: application/json\r\n" +
-                "Content-Length: ${body.length}\r\n" +
+                "Content-Length: $bodyBytes\r\n" +
                 "Access-Control-Allow-Origin: *\r\n" +
                 "Connection: close\r\n" +
                 "\r\n" +

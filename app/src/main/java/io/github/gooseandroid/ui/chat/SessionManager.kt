@@ -45,6 +45,15 @@ class SessionManager(
     }
 
     /**
+     * Persist a new session that was already created synchronously in the ViewModel.
+     * This handles the I/O portion (saving sessions to disk).
+     */
+    suspend fun persistNewSession(session: SessionInfo) {
+        val cb = callbacks ?: return
+        sessionRepository.saveSessions(cb.getSessions())
+    }
+
+    /**
      * Create a new session. Returns the new session ID.
      */
     suspend fun createNewSession(): String {

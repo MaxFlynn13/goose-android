@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
 import okhttp3.*
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * ACP (Agent Client Protocol) WebSocket client.
@@ -36,8 +38,8 @@ class AcpClient(private val wsUrl: String) {
         .pingInterval(java.time.Duration.ofSeconds(30))
         .build()
 
-    private var requestId = 0
-    private val pendingRequests = mutableMapOf<Int, CompletableDeferred<JsonObject>>()
+    private val requestId = AtomicInteger(0)
+    private val pendingRequests = ConcurrentHashMap<Int, CompletableDeferred<JsonObject>>()
     private val _notifications = MutableSharedFlow<AcpNotification>(extraBufferCapacity = 64)
     val notifications: SharedFlow<AcpNotification> = _notifications.asSharedFlow()
 
@@ -177,10 +179,11 @@ class AcpClient(private val wsUrl: String) {
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         _connectionState.value = ConnectionState.DISCONNECTED
+        client.dispatcher.executorService.shutdown()
     }
 
     private suspend fun sendRequest(method: String, params: JsonObject): Result<JsonObject> {
-        val id = ++requestId
+        val id = requestId.incrementAndGet()
         val message = buildJsonObject {
             put("jsonrpc", "2.0")
             put("id", id)
@@ -238,8 +241,11 @@ class AcpClient(private val wsUrl: String) {
     }
 
     private fun failAllPending(error: Throwable) {
-        pendingRequests.values.forEach { it.completeExceptionally(error) }
-        pendingRequests.clear()
+        val entries = pendingRequests.entries.toList()
+        entries.forEach { (key, deferred) ->
+            deferred.completeExceptionally(error)
+            pendingRequests.remove(key)
+        }
     }
 }
 

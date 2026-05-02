@@ -21,11 +21,15 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 
-// --- Data models for provider catalog ---
+// --- Data model for provider catalog (local to Settings, avoids name collision
+//     with io.github.gooseandroid.data.models.ProviderInfo) ---
 
-private data class ProviderInfo(
+private data class SettingsProviderEntry(
     val id: String,
     val name: String,
     val description: String,
@@ -37,31 +41,31 @@ private data class ProviderInfo(
 )
 
 private val providerCatalog = listOf(
-    ProviderInfo(
+    SettingsProviderEntry(
         id = "anthropic",
         name = "Anthropic",
         description = "Claude models with advanced reasoning and coding capabilities",
         models = listOf("claude-sonnet-4-20250514", "claude-3-5-haiku-20241022")
     ),
-    ProviderInfo(
+    SettingsProviderEntry(
         id = "openai",
         name = "OpenAI",
         description = "GPT-4o and reasoning models from OpenAI",
         models = listOf("gpt-4o", "gpt-4o-mini", "o3-mini")
     ),
-    ProviderInfo(
+    SettingsProviderEntry(
         id = "google",
         name = "Google Gemini",
         description = "Gemini multimodal models from Google DeepMind",
         models = listOf("gemini-2.0-flash", "gemini-2.5-pro-preview-06-05")
     ),
-    ProviderInfo(
+    SettingsProviderEntry(
         id = "mistral",
         name = "Mistral",
         description = "Open-weight and commercial models from Mistral AI",
         models = listOf("mistral-large-latest", "mistral-small-latest")
     ),
-    ProviderInfo(
+    SettingsProviderEntry(
         id = "openrouter",
         name = "OpenRouter",
         description = "Unified API gateway to multiple model providers",
@@ -71,7 +75,7 @@ private val providerCatalog = listOf(
             "google/gemini-2.0-flash-001"
         )
     ),
-    ProviderInfo(
+    SettingsProviderEntry(
         id = "ollama",
         name = "Ollama",
         description = "Run open-source models locally via Ollama",
@@ -80,7 +84,7 @@ private val providerCatalog = listOf(
         requiresBaseUrl = true,
         defaultBaseUrl = "http://localhost:11434"
     ),
-    ProviderInfo(
+    SettingsProviderEntry(
         id = "custom",
         name = "Custom OpenAI-compatible",
         description = "Any provider with an OpenAI-compatible API endpoint",
@@ -229,11 +233,8 @@ fun SettingsScreen(
                             }
                         }
                     },
-                    onApiKeyChange = { newKey ->
-                        scope.launch {
-                            settingsStore.setString(settingsKeyForProvider(provider.id), newKey)
-                        }
-                    },
+                    settingsKey = settingsKeyForProvider(provider.id),
+                    settingsStore = settingsStore,
                     onBaseUrlChange = { newUrl ->
                         scope.launch {
                             when (provider.id) {
@@ -519,9 +520,10 @@ private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vect
 
 // --- Provider Card ---
 
+@OptIn(FlowPreview::class)
 @Composable
 private fun ProviderCard(
-    provider: ProviderInfo,
+    provider: SettingsProviderEntry,
     isActive: Boolean,
     isConfigured: Boolean,
     isExpanded: Boolean,
@@ -530,10 +532,13 @@ private fun ProviderCard(
     modelName: String,
     onToggleExpand: () -> Unit,
     onSelectActive: () -> Unit,
-    onApiKeyChange: (String) -> Unit,
+    settingsKey: String,
+    settingsStore: SettingsStore,
     onBaseUrlChange: (String) -> Unit,
     onModelNameChange: (String) -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+
     val containerColor = if (isActive) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
     } else {
@@ -641,16 +646,25 @@ private fun ProviderCard(
                         )
                     }
 
-                    // API key field
+                    // API key field — debounced: saves 500ms after last keystroke
                     if (provider.requiresApiKey) {
                         var keyValue by remember(apiKey) { mutableStateOf(apiKey) }
                         var keyVisible by remember { mutableStateOf(false) }
+
+                        // Debounce the API key save: only persist 500ms after the user
+                        // stops typing, avoiding 40 writes for a 40-char key.
+                        LaunchedEffect(Unit) {
+                            snapshotFlow { keyValue }
+                                .debounce(500L)
+                                .collect { debouncedKey ->
+                                    settingsStore.setString(settingsKey, debouncedKey)
+                                }
+                        }
 
                         OutlinedTextField(
                             value = keyValue,
                             onValueChange = { newVal ->
                                 keyValue = newVal
-                                onApiKeyChange(newVal)
                             },
                             label = { Text("API Key") },
                             placeholder = { Text("Enter your API key") },

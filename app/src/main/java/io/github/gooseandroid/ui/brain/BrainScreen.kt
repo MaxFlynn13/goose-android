@@ -1,5 +1,8 @@
 package io.github.gooseandroid.ui.brain
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
@@ -42,20 +45,16 @@ fun BrainScreen(
     var nodeCount by remember { mutableStateOf(0) }
     var allTags by remember { mutableStateOf<List<String>>(emptyList()) }
 
-    // Load nodes
+    // Single LaunchedEffect: initial load + react to changes via nodesChanged flow.
+    // The flow collector handles both the initial state and subsequent updates.
     LaunchedEffect(Unit) {
         try {
+            // Initial load
             nodes = brainDb.getAllNodes()
             nodeCount = brainDb.getNodeCount()
             allTags = brainDb.getAllTags()
-        } catch (e: Exception) {
-            Log.e("BrainScreen", "Failed to load nodes", e)
-        }
-    }
 
-    // React to changes
-    LaunchedEffect(Unit) {
-        try {
+            // React to subsequent changes
             brainDb.nodesChanged.collect {
                 nodes = if (searchQuery.isBlank()) {
                     brainDb.getAllNodes()
@@ -66,7 +65,7 @@ fun BrainScreen(
                 allTags = brainDb.getAllTags()
             }
         } catch (e: Exception) {
-            Log.e("BrainScreen", "Error in nodesChanged flow", e)
+            Log.e("BrainScreen", "Error loading/observing nodes", e)
         }
     }
 
@@ -478,32 +477,55 @@ private fun ImportExportSheet(
             Button(
                 onClick = {
                     scope.launch {
-                        val file = brainDb.exportToFile(context)
-                        // TODO: Share via Android share sheet
-                        Log.d("Brain", "Exported to: ${file.absolutePath}")
+                        try {
+                            val jsonString = brainDb.exportBrain()
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Goose Brain Export", jsonString))
+                            Toast.makeText(context, "Exported to clipboard", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Log.e("Brain", "Export failed", e)
+                            Toast.makeText(context, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Default.Upload, null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Export Brain (JSON)")
+                Text("Export Brain to Clipboard")
             }
 
             OutlinedButton(
                 onClick = {
-                    // TODO: Open file picker for import
+                    scope.launch {
+                        try {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clipData = clipboard.primaryClip
+                            val clipText = clipData?.getItemAt(0)?.text?.toString()
+                            if (clipText.isNullOrBlank()) {
+                                Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+                            val imported = brainDb.importBrain(clipText)
+                            if (imported > 0) {
+                                Toast.makeText(context, "Imported $imported nodes", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "No new nodes to import (may already exist)", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            Log.e("Brain", "Import failed", e)
+                            Toast.makeText(context, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Default.Download, null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Import Brain (JSON)")
+                Text("Import Brain from Clipboard")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
-
-

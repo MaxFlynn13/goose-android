@@ -12,8 +12,11 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import io.github.gooseandroid.data.SettingsKeys
+import io.github.gooseandroid.data.SettingsStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -60,8 +63,9 @@ fun ChatScreen(
         }
     }
 
-    // Auto-scroll to bottom when new messages arrive or streaming updates
-    LaunchedEffect(messages.size, streamingContent) {
+    // Auto-scroll to bottom when new messages arrive (keyed on messages.size only,
+    // NOT streamingContent, to avoid firing on every streaming token)
+    LaunchedEffect(messages.size) {
         val totalItems = listState.layoutInfo.totalItemsCount
         if (totalItems > 0) {
             listState.animateScrollToItem(totalItems - 1)
@@ -158,12 +162,19 @@ fun ChatScreen(
             // Input bar with IME insets applied ONLY here
             ChatInputBar(
                 onSend = { text ->
-                    // Handle /compact command
-                    if (text.trim() == "/compact") {
-                        viewModel.addSystemMessage("[compact] Context compaction requested.")
-                        viewModel.sendMessage("/compact")
-                    } else {
-                        viewModel.sendMessage(text)
+                    val trimmed = text.trim()
+                    // Handle slash commands before sending as regular messages
+                    when {
+                        trimmed == "/compact" -> {
+                            viewModel.compactConversation()
+                        }
+                        trimmed.startsWith("/") -> {
+                            // Unknown slash command — show hint
+                            viewModel.addSystemMessage("Unknown command: $trimmed. Available: /compact")
+                        }
+                        else -> {
+                            viewModel.sendMessage(text)
+                        }
                     }
                     scope.launch {
                         delay(100)
@@ -187,12 +198,26 @@ fun ChatScreen(
 }
 
 // ---------------------------------------------------------------------------
-// Provider/Model Chip
+// Provider/Model Chip — reads active provider/model from SettingsStore
 // ---------------------------------------------------------------------------
 
 @Composable
 private fun ProviderModelChip() {
-    val modelLabel = remember { "Claude Sonnet 4" }
+    val context = LocalContext.current
+    val settingsStore = remember { SettingsStore(context) }
+
+    val activeProvider by settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER, "anthropic")
+        .collectAsState(initial = "anthropic")
+    val activeModel by settingsStore.getString(SettingsKeys.ACTIVE_MODEL, "claude-sonnet-4-20250514")
+        .collectAsState(initial = "claude-sonnet-4-20250514")
+
+    // Look up a friendly display name from the catalog, falling back to the raw model id
+    val modelLabel = remember(activeProvider, activeModel) {
+        val provider = getProviderById(activeProvider)
+        val modelOption = provider?.models?.find { it.id == activeModel }
+        modelOption?.displayName ?: activeModel
+    }
+
     SuggestionChip(
         onClick = {},
         label = {
