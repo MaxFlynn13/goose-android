@@ -205,30 +205,64 @@ fun ChatScreen(
 private fun ProviderModelChip() {
     val context = LocalContext.current
     val settingsStore = remember { SettingsStore(context) }
+    val scope = rememberCoroutineScope()
+    var expanded by remember { mutableStateOf(false) }
 
     val activeProvider by settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER, "anthropic")
         .collectAsState(initial = "anthropic")
     val activeModel by settingsStore.getString(SettingsKeys.ACTIVE_MODEL, "claude-sonnet-4-20250514")
         .collectAsState(initial = "claude-sonnet-4-20250514")
 
-    // Look up a friendly display name from the catalog, falling back to the raw model id
     val modelLabel = remember(activeProvider, activeModel) {
         val provider = getProviderById(activeProvider)
-        val modelOption = provider?.models?.find { it.id == activeModel }
-        modelOption?.displayName ?: activeModel
+        provider?.models?.find { it.id == activeModel }?.displayName ?: activeModel
     }
 
-    SuggestionChip(
-        onClick = {},
-        label = {
-            Text(
-                text = modelLabel,
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1
-            )
-        },
-        modifier = Modifier.padding(end = 8.dp)
-    )
+    Box {
+        SuggestionChip(
+            onClick = { expanded = true },
+            label = {
+                Text(text = modelLabel, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            },
+            modifier = Modifier.padding(end = 8.dp)
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            PROVIDER_CATALOG.forEach { provider ->
+                // Provider header
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            provider.displayName,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    onClick = {},
+                    enabled = false
+                )
+                // Models under this provider
+                provider.models.forEach { model ->
+                    val isActive = activeProvider == provider.id && activeModel == model.id
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = if (isActive) "  ${model.displayName}  *" else "  ${model.displayName}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        },
+                        onClick = {
+                            scope.launch {
+                                settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, provider.id)
+                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, model.id)
+                            }
+                            expanded = false
+                        }
+                    )
+                }
+                HorizontalDivider()
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

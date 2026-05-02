@@ -102,7 +102,7 @@ private val providerCatalog = listOf(
 fun SettingsScreen(
     onBack: () -> Unit,
     onNavigateToModels: () -> Unit,
-    onNavigateToAppearance: () -> Unit = {},
+
     onNavigateToExtensions: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -151,6 +151,10 @@ fun SettingsScreen(
 
     // Track which provider card is expanded
     var expandedProviderId by remember { mutableStateOf<String?>(null) }
+    var themeMode by remember { mutableStateOf("DARK") }
+    LaunchedEffect(Unit) {
+        settingsStore.getString(SettingsKeys.THEME_MODE, "DARK").collect { themeMode = it }
+    }
 
     // Helper to get the stored key for a provider
     fun getKeyForProvider(providerId: String): String = when (providerId) {
@@ -394,12 +398,24 @@ fun SettingsScreen(
             }
 
             item {
-                NavigationCard(
-                    title = "Appearance",
-                    subtitle = "Theme, colors, and text scaling",
-                    icon = Icons.Filled.Palette,
-                    onClick = onNavigateToAppearance
-                )
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Theme", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = themeMode == "DARK",
+                                onClick = { scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "DARK") }; themeMode = "DARK" },
+                                label = { Text("Dark") }
+                            )
+                            FilterChip(
+                                selected = themeMode == "LIGHT",
+                                onClick = { scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "LIGHT") }; themeMode = "LIGHT" },
+                                label = { Text("Light") }
+                            )
+                        }
+                    }
+                }
             }
 
             // ==================== ABOUT SECTION ====================
