@@ -115,6 +115,32 @@ class GooseService : Service() {
                 "--with-builtin", "developer,memory"
             )
 
+            // Pre-flight: verify binary can execute at all
+            Log.i(TAG, "Pre-flight check: running binary with --version")
+            io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Pre-flight: ${binaryFile.absolutePath} --version")
+            try {
+                val preflight = ProcessBuilder(listOf(binaryFile.absolutePath, "--version"))
+                    .directory(homeDir)
+                    .redirectErrorStream(true)
+                    .start()
+                val preflightOutput = preflight.inputStream.bufferedReader().readText().take(500)
+                val preflightExit = preflight.waitFor()
+                Log.i(TAG, "Pre-flight result: exit=$preflightExit, output='$preflightOutput'")
+                io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Pre-flight exit=$preflightExit: $preflightOutput")
+
+                if (preflightExit != 0 && preflightOutput.isBlank()) {
+                    Log.e(TAG, "Binary cannot execute on this device")
+                    io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Binary cannot execute! Falling back to cloud API.")
+                    startLocalOnlyMode()
+                    return
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Pre-flight failed: ${e.message}", e)
+                io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Pre-flight exception: ${e.message}")
+                startLocalOnlyMode()
+                return
+            }
+
             Log.i(TAG, "Executing: ${command.joinToString(" ")}")
 
             val processBuilder = ProcessBuilder(command)
