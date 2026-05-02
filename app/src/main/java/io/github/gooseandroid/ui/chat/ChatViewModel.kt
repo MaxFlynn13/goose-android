@@ -194,7 +194,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     // ACP session failed — null out client so cloud fallback is used
                     acpClient = null
                     client.disconnect()
-                    addSystemMessage("Goose backend session failed. Using direct cloud API instead.")
+                    addSystemMessage("Goose agent unavailable — using direct LLM mode.\nYou can chat normally but tool use (shell, edit, file ops) requires the Goose backend.")
                 }
             }.onFailure { error ->
                 Log.e(TAG, "Failed to connect to goose backend", error)
@@ -202,8 +202,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 acpClient = null
                 if (_sessions.value.isEmpty()) createNewSession()
                 addSystemMessage(
-                    "Goose backend not available. Using direct cloud API.\n\n" +
-                    "Configure your API key in Settings to chat."
+                    "Goose agent unavailable — using direct LLM mode.\n" +
+                    "Chat works normally. Tool use (shell, edit, file ops) requires the Goose backend.\n\n" +
+                    "Check Logs screen for details on why the backend failed to start."
                 )
             }
         }

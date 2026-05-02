@@ -124,6 +124,29 @@ class GooseService : Service() {
             processBuilder.environment().putAll(env)
 
             gooseProcess = processBuilder.start()
+            Log.i(TAG, "Process started, pid=${gooseProcess?.toString()}")
+            io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Process started: ${command.joinToString(" ")}")
+
+            // Give the process a moment to crash (if it's going to)
+            kotlinx.coroutines.delay(500)
+            if (gooseProcess?.isAlive != true) {
+                val exitCode = try { gooseProcess?.exitValue() } catch (e: Exception) { -1 }
+                Log.e(TAG, "Process died immediately! exitCode=$exitCode")
+                io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Process died immediately! exitCode=$exitCode")
+
+                // Try to read any error output
+                val errorOutput = try {
+                    gooseProcess?.errorStream?.bufferedReader()?.readText()?.take(500) ?: ""
+                } catch (e: Exception) { "" }
+                if (errorOutput.isNotBlank()) {
+                    Log.e(TAG, "Process error output: $errorOutput")
+                    io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Error: $errorOutput")
+                }
+
+                // Fall back immediately
+                startLocalOnlyMode()
+                return
+            }
 
             // Capture stdout for log viewer
             scope.launch {
@@ -167,13 +190,29 @@ class GooseService : Service() {
                 updateNotification("Goose is running on port $port")
             } else {
                 Log.e(TAG, "Goose failed to become ready after $MAX_SERVER_RETRIES attempts")
-                updateNotification("Goose failed to start")
+
+                // Check if process is still alive or crashed
+                val exitCode = try { gooseProcess?.exitValue() } catch (e: IllegalThreadStateException) { null }
+                val processAlive = gooseProcess?.isAlive == true
+                Log.e(TAG, "Process alive=$processAlive, exitCode=$exitCode")
+                io.github.gooseandroid.ui.doctor.LogCollector.addLine(
+                    "[SERVICE] Goose failed to start. Process alive=$processAlive, exitCode=$exitCode"
+                )
+
                 stopGoose()
+
+                // CRITICAL: Fall back to local-only mode so cloud API still works
+                Log.i(TAG, "Falling back to local-only mode for cloud API access")
+                startLocalOnlyMode()
             }
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start goose", e)
+            io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Exception: ${e.message}")
             updateNotification("Goose error: ${e.message}")
+
+            // CRITICAL: Fall back to local-only mode so cloud API still works
+            startLocalOnlyMode()
         }
     }
 
