@@ -1,6 +1,13 @@
-package io.github.gooseandroid.ui.chat
+package io.github.gooseandroid.data.models
 
 import kotlinx.serialization.Serializable
+
+/**
+ * Core data models shared across the entire application.
+ * Located in data.models to avoid circular dependencies.
+ *
+ * Imported by: ui.chat, network, data, acp
+ */
 
 data class ChatMessage(
     val id: String,
@@ -22,13 +29,6 @@ data class ToolCall(
 
 enum class ToolCallStatus { RUNNING, COMPLETE, ERROR }
 
-data class AttachmentInfo(
-    val name: String,
-    val mimeType: String,
-    val content: String, // text content or base64 for images
-    val isImage: Boolean = false
-)
-
 @Serializable
 data class SessionInfo(
     val id: String,
@@ -40,8 +40,15 @@ data class SessionInfo(
     val modelId: String = ""
 )
 
+data class AttachmentInfo(
+    val name: String,
+    val mimeType: String,
+    val content: String,
+    val isImage: Boolean = false
+)
+
 /**
- * Provider and model catalog matching Desktop Goose.
+ * Provider and model catalog.
  */
 data class ProviderInfo(
     val id: String,

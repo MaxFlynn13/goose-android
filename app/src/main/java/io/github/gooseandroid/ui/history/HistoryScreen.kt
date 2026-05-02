@@ -28,8 +28,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import io.github.gooseandroid.ui.chat.SessionInfo
-import io.github.gooseandroid.ui.chat.getProviderById
+import io.github.gooseandroid.data.models.SessionInfo
+import io.github.gooseandroid.data.models.getProviderById
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
