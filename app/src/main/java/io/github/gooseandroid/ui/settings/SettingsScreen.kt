@@ -151,9 +151,9 @@ fun SettingsScreen(
 
     // Track which provider card is expanded
     var expandedProviderId by remember { mutableStateOf<String?>(null) }
-    var themeMode by remember { mutableStateOf("DARK") }
+    var themeMode by remember { mutableStateOf("SYSTEM") }
     LaunchedEffect(Unit) {
-        settingsStore.getString(SettingsKeys.THEME_MODE, "DARK").collect { themeMode = it }
+        settingsStore.getString(SettingsKeys.THEME_MODE, "SYSTEM").collect { themeMode = it }
     }
 
     // Helper to get the stored key for a provider
@@ -403,6 +403,11 @@ fun SettingsScreen(
                         Text("Theme", style = MaterialTheme.typography.titleSmall)
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = themeMode == "SYSTEM",
+                                onClick = { scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "SYSTEM") }; themeMode = "SYSTEM" },
+                                label = { Text("System") }
+                            )
                             FilterChip(
                                 selected = themeMode == "DARK",
                                 onClick = { scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "DARK") }; themeMode = "DARK" },

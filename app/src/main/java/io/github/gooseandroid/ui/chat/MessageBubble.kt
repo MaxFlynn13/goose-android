@@ -236,7 +236,7 @@ fun MarkdownContent(
     textColor: Color,
     modifier: Modifier = Modifier
 ) {
-    val blocks = parseMarkdownBlocks(content)
+    val blocks = remember(content) { parseMarkdownBlocks(content) }
 
     Column(
         modifier = modifier,

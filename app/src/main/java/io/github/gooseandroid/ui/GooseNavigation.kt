@@ -1,5 +1,6 @@
 package io.github.gooseandroid.ui
 
+import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -64,8 +65,14 @@ fun GooseNavigation(sharedText: String? = null) {
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Main content
-        NavHost(navController, startDestination = "chat", modifier = Modifier.fillMaxSize()) {
+        // Main content with slide transitions
+        NavHost(
+            navController, startDestination = "chat", modifier = Modifier.fillMaxSize(),
+            enterTransition = { slideInHorizontally(initialOffsetX = { it / 4 }) + fadeIn(tween(200)) },
+            exitTransition = { fadeOut(tween(150)) },
+            popEnterTransition = { slideInHorizontally(initialOffsetX = { -it / 4 }) + fadeIn(tween(200)) },
+            popExitTransition = { slideOutHorizontally(targetOffsetX = { it / 4 }) + fadeOut(tween(150)) }
+        ) {
             composable("chat") {
                 ChatScreen(
                     viewModel = chatViewModel,

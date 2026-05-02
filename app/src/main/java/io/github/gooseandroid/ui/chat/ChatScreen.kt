@@ -11,33 +11,22 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-/**
- * Chat screen - main conversation interface for Goose AI Android.
- *
- * Features:
- * - Markdown rendering in assistant messages
- * - Streaming text display (character by character)
- * - Expandable tool call cards with status and output
- * - Message actions (copy, retry, delete) via long press popup menu
- * - Syntax-highlighted code blocks with copy button
- * - New chat button in top bar
- * - Session title display
- * - Provider/model indicator chip
- * - File attachments (images and text files)
- * - Voice input via SpeechRecognizer
- * - Inline image display for assistant messages
- * - /compact command for context compaction
- * - Context token counter in top bar
- */
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,55 +44,53 @@ fun ChatScreen(
     val currentSessionTitle by viewModel.currentSessionTitle.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val clipboardManager = LocalClipboardManager.current
 
-    // Token counter: approximate tokens from message history
-    val estimatedTokens by remember(messages) {
+    // Smart scroll: only auto-scroll when user is near the bottom
+    val isNearBottom by remember {
         derivedStateOf {
-            messages.sumOf { it.content.length } / 4
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val totalItems = listState.layoutInfo.totalItemsCount
+            totalItems == 0 || lastVisible >= totalItems - 3
         }
     }
 
-    // Auto-scroll to bottom when new messages arrive (keyed on messages.size only,
-    // NOT streamingContent, to avoid firing on every streaming token)
+    // Auto-scroll only when near bottom AND new messages arrive
     LaunchedEffect(messages.size) {
-        val totalItems = listState.layoutInfo.totalItemsCount
-        if (totalItems > 0) {
-            listState.animateScrollToItem(totalItems - 1)
+        if (isNearBottom) {
+            val totalItems = listState.layoutInfo.totalItemsCount
+            if (totalItems > 0) {
+                listState.animateScrollToItem(totalItems - 1)
+            }
         }
+    }
+
+    // Build items with date separators
+    val itemsWithSeparators = remember(messages) {
+        buildChatItems(messages)
     }
 
     Scaffold(
         modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(
-                            text = currentSessionTitle.ifBlank { "Goose" },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "~$estimatedTokens tokens",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = currentSessionTitle.ifBlank { "Goose" },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 },
                 navigationIcon = {
                     IconButton(onClick = onMenuClick) {
-                        Icon(
-                            imageVector = Icons.Default.Menu,
-                            contentDescription = "Open menu"
-                        )
+                        Icon(Icons.Default.Menu, contentDescription = "Open menu")
                     }
                 },
                 actions = {
                     IconButton(onClick = onNewChat) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "New chat"
-                        )
+                        Icon(Icons.Default.Add, contentDescription = "New chat")
                     }
                     ProviderModelChip()
                 },
@@ -119,69 +106,70 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Messages list
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(messages, key = { it.id }) { message ->
-                    MessageItem(
-                        message = message,
-                        onRetry = { viewModel.sendMessage(it) },
-                        onDelete = { /* handled by viewModel if exposed */ }
-                    )
-                }
-
-                // Streaming message (if generating and content is available)
-                if (isGenerating && streamingContent.isNotBlank()) {
-                    item(key = "_streaming_bubble") {
-                        StreamingBubble(content = streamingContent)
+            if (messages.isEmpty() && !isGenerating) {
+                // P0: Welcome / empty state
+                WelcomeScreen(
+                    onSuggestionClick = { viewModel.sendMessage(it) },
+                    modifier = Modifier.weight(1f)
+                )
+            } else {
+                // Messages list with date separators
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(itemsWithSeparators, key = { it.key }) { item ->
+                        when (item) {
+                            is ChatItem.DateSeparator -> DateSeparatorRow(item.label)
+                            is ChatItem.Message -> MessageItem(
+                                message = item.message,
+                                onRetry = { viewModel.sendMessage(it) },
+                                onCopy = { text ->
+                                    clipboardManager.setText(AnnotatedString(text))
+                                    scope.launch { snackbarHostState.showSnackbar("Copied to clipboard") }
+                                }
+                            )
+                        }
                     }
-                }
 
-                // Active tool calls
-                val runningTools = toolCalls.filter { it.status == ToolCallStatus.RUNNING }
-                if (runningTools.isNotEmpty()) {
-                    items(runningTools, key = { "tool_${it.id}_${it.name}" }) { tool ->
-                        ToolCallCard(toolCall = tool)
+                    // Streaming bubble
+                    if (isGenerating && streamingContent.isNotBlank()) {
+                        item(key = "_streaming") {
+                            StreamingBubble(content = streamingContent)
+                        }
                     }
-                }
 
-                // Typing indicator when generating but no streaming content yet
-                if (isGenerating && streamingContent.isBlank()) {
-                    item(key = "_typing_indicator") {
-                        TypingIndicator()
+                    // Running tool calls
+                    val running = toolCalls.filter { it.status == ToolCallStatus.RUNNING }
+                    if (running.isNotEmpty()) {
+                        items(running, key = { "tool_${it.id}" }) { ToolCallCard(it) }
+                    }
+
+                    // Typing indicator
+                    if (isGenerating && streamingContent.isBlank()) {
+                        item(key = "_typing") { TypingIndicator() }
                     }
                 }
             }
 
-            // Input bar with IME insets applied ONLY here
+            // Input bar
             ChatInputBar(
                 onSend = { text ->
                     val trimmed = text.trim()
-                    // Handle slash commands before sending as regular messages
                     when {
-                        trimmed == "/compact" -> {
-                            viewModel.compactConversation()
-                        }
-                        trimmed.startsWith("/") -> {
-                            // Unknown slash command — show hint
-                            viewModel.addSystemMessage("Unknown command: $trimmed. Available: /compact")
-                        }
-                        else -> {
-                            viewModel.sendMessage(text)
-                        }
+                        trimmed == "/compact" -> viewModel.compactConversation()
+                        trimmed.startsWith("/") -> viewModel.addSystemMessage("Unknown command: $trimmed. Available: /compact")
+                        else -> viewModel.sendMessage(text)
                     }
+                    // Scroll to bottom after sending
                     scope.launch {
                         delay(100)
-                        val totalItems = listState.layoutInfo.totalItemsCount
-                        if (totalItems > 0) {
-                            listState.animateScrollToItem(totalItems - 1)
-                        }
+                        val total = listState.layoutInfo.totalItemsCount
+                        if (total > 0) listState.animateScrollToItem(total - 1)
                     }
                 },
                 isGenerating = isGenerating,
@@ -198,7 +186,123 @@ fun ChatScreen(
 }
 
 // ---------------------------------------------------------------------------
-// Provider/Model Chip — reads active provider/model from SettingsStore
+// Welcome / Empty State (P0 #1)
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun WelcomeScreen(
+    onSuggestionClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val hour = remember { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
+    val greeting = when {
+        hour < 12 -> "Good morning"
+        hour < 17 -> "Good afternoon"
+        else -> "Good evening"
+    }
+
+    val suggestions = remember {
+        listOf(
+            "Explain how Kotlin coroutines work",
+            "Help me debug a crash in my Android app",
+            "Write a bash script to find large files",
+            "Summarize the key ideas of a paper I paste"
+        )
+    }
+
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Text(
+                text = greeting,
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "How can Goose help you today?",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(32.dp))
+
+            suggestions.forEach { suggestion ->
+                OutlinedCard(
+                    onClick = { onSuggestionClick(suggestion) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Text(
+                        text = suggestion,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Date Separators (P1 #5)
+// ---------------------------------------------------------------------------
+
+private sealed class ChatItem(val key: String) {
+    class DateSeparator(val label: String, key: String) : ChatItem(key)
+    class Message(val message: ChatMessage) : ChatItem(message.id)
+}
+
+private fun buildChatItems(messages: List<ChatMessage>): List<ChatItem> {
+    if (messages.isEmpty()) return emptyList()
+    val items = mutableListOf<ChatItem>()
+    var lastDateLabel = ""
+    for (msg in messages) {
+        val dateLabel = formatDateLabel(msg.timestamp)
+        if (dateLabel != lastDateLabel) {
+            items.add(ChatItem.DateSeparator(dateLabel, "sep_${msg.timestamp}"))
+            lastDateLabel = dateLabel
+        }
+        items.add(ChatItem.Message(msg))
+    }
+    return items
+}
+
+private fun formatDateLabel(timestamp: Long): String {
+    val cal = Calendar.getInstance()
+    val today = cal.get(Calendar.DAY_OF_YEAR)
+    val year = cal.get(Calendar.YEAR)
+    cal.timeInMillis = timestamp
+    val msgDay = cal.get(Calendar.DAY_OF_YEAR)
+    val msgYear = cal.get(Calendar.YEAR)
+    return when {
+        msgYear == year && msgDay == today -> "Today"
+        msgYear == year && msgDay == today - 1 -> "Yesterday"
+        else -> SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(Date(timestamp))
+    }
+}
+
+@Composable
+private fun DateSeparatorRow(label: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Provider/Model Chip with dropdown
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -221,35 +325,19 @@ private fun ProviderModelChip() {
     Box {
         SuggestionChip(
             onClick = { expanded = true },
-            label = {
-                Text(text = modelLabel, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-            },
+            label = { Text(modelLabel, style = MaterialTheme.typography.labelSmall, maxLines = 1) },
             modifier = Modifier.padding(end = 8.dp)
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             PROVIDER_CATALOG.forEach { provider ->
-                // Provider header
                 DropdownMenuItem(
-                    text = {
-                        Text(
-                            provider.displayName,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    },
-                    onClick = {},
-                    enabled = false
+                    text = { Text(provider.displayName, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) },
+                    onClick = {}, enabled = false
                 )
-                // Models under this provider
                 provider.models.forEach { model ->
                     val isActive = activeProvider == provider.id && activeModel == model.id
                     DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = if (isActive) "  ${model.displayName}  *" else "  ${model.displayName}",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        },
+                        text = { Text(if (isActive) "  ${model.displayName}  *" else "  ${model.displayName}", style = MaterialTheme.typography.bodySmall) },
                         onClick = {
                             scope.launch {
                                 settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, provider.id)
@@ -266,18 +354,31 @@ private fun ProviderModelChip() {
 }
 
 // ---------------------------------------------------------------------------
-// Message Item (dispatches by role)
+// Message Item dispatcher
 // ---------------------------------------------------------------------------
 
 @Composable
 private fun MessageItem(
     message: ChatMessage,
     onRetry: (String) -> Unit,
-    onDelete: (ChatMessage) -> Unit
+    onCopy: (String) -> Unit
 ) {
-    when (message.role) {
-        MessageRole.USER -> UserBubble(message = message, onRetry = onRetry, onDelete = onDelete)
-        MessageRole.ASSISTANT -> AssistantBubble(message = message, onDelete = onDelete)
-        MessageRole.SYSTEM -> SystemBubble(message = message)
+    Column {
+        when (message.role) {
+            MessageRole.USER -> UserBubble(message = message, onRetry = onRetry, onDelete = {})
+            MessageRole.ASSISTANT -> AssistantBubble(message = message, onDelete = {})
+            MessageRole.SYSTEM -> SystemBubble(message = message)
+        }
+        // P1 #6: Message timestamp
+        Text(
+            text = formatTimestamp(message.timestamp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.padding(start = if (message.role == MessageRole.USER) 0.dp else 4.dp, top = 2.dp)
+        )
     }
+}
+
+private fun formatTimestamp(timestamp: Long): String {
+    return SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(timestamp))
 }

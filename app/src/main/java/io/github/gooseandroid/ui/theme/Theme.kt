@@ -21,13 +21,13 @@ import io.github.gooseandroid.data.SettingsStore
 fun GooseTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
     val settingsStore = remember { SettingsStore(context) }
-    val themePref by settingsStore.getString(SettingsKeys.THEME_MODE, "DARK")
-        .collectAsState(initial = "DARK")
+    val themePref by settingsStore.getString(SettingsKeys.THEME_MODE, "SYSTEM")
+        .collectAsState(initial = "SYSTEM")
 
     val useDarkTheme = when (themePref) {
         "LIGHT" -> false
         "DARK" -> true
-        else -> isSystemInDarkTheme()
+        else -> isSystemInDarkTheme() // "SYSTEM" or any unknown value
     }
 
     val colorScheme = if (useDarkTheme) {
