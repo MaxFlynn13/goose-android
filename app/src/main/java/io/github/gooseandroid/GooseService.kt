@@ -33,6 +33,13 @@ class GooseService : Service() {
         private const val MIN_BINARY_SIZE_BYTES = 1000L
         /** Maximum number of full start-up retries when waitForServer times out. */
         private const val MAX_SERVER_RETRIES = 2
+
+        /** Safe log to LogCollector — never crashes */
+        private fun logToCollector(msg: String) {
+            try {
+                logToCollector(msg)
+            } catch (_: Exception) { /* ignore */ }
+        }
     }
 
     private var gooseProcess: Process? = null
@@ -61,7 +68,15 @@ class GooseService : Service() {
         startForeground(NOTIFICATION_ID, notification)
 
         scope.launch {
-            startGoose()
+            try {
+                startGoose()
+            } catch (e: Exception) {
+                Log.e(TAG, "FATAL: startGoose crashed", e)
+                logToCollector("[FATAL] startGoose: ${e.message}")
+                // Ensure we at least get into local-only mode
+                GoosePortHolder.localOnlyMode = true
+                updateNotification("Goose (cloud API mode)")
+            }
         }
 
         return START_STICKY
@@ -80,11 +95,15 @@ class GooseService : Service() {
 
     private suspend fun startGoose() {
         try {
-            // Initialize runtime tools (BusyBox, Git) if not already done
-            val runtimeManager = io.github.gooseandroid.runtime.RuntimeManager(this)
-            if (!runtimeManager.isInitialized()) {
-                Log.i(TAG, "Initializing runtime tools...")
-                runtimeManager.initialize()
+            // Initialize runtime tools (BusyBox, Git) — non-fatal if assets missing
+            try {
+                val runtimeManager = io.github.gooseandroid.runtime.RuntimeManager(this)
+                if (!runtimeManager.isInitialized()) {
+                    Log.i(TAG, "Initializing runtime tools...")
+                    runtimeManager.initialize()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Runtime tools init failed (non-fatal): ${e.message}")
             }
 
             port = findFreePort()
@@ -117,7 +136,7 @@ class GooseService : Service() {
 
             // Pre-flight: verify binary can execute at all
             Log.i(TAG, "Pre-flight check: running binary with --version")
-            io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Pre-flight: ${binaryFile.absolutePath} --version")
+            logToCollector("[SERVICE] Pre-flight: ${binaryFile.absolutePath} --version")
             try {
                 val preflight = ProcessBuilder(listOf(binaryFile.absolutePath, "--version"))
                     .directory(homeDir)
@@ -126,17 +145,17 @@ class GooseService : Service() {
                 val preflightOutput = preflight.inputStream.bufferedReader().readText().take(500)
                 val preflightExit = preflight.waitFor()
                 Log.i(TAG, "Pre-flight result: exit=$preflightExit, output='$preflightOutput'")
-                io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Pre-flight exit=$preflightExit: $preflightOutput")
+                logToCollector("[SERVICE] Pre-flight exit=$preflightExit: $preflightOutput")
 
                 if (preflightExit != 0 && preflightOutput.isBlank()) {
                     Log.e(TAG, "Binary cannot execute on this device")
-                    io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Binary cannot execute! Falling back to cloud API.")
+                    logToCollector("[SERVICE] Binary cannot execute! Falling back to cloud API.")
                     startLocalOnlyMode()
                     return
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Pre-flight failed: ${e.message}", e)
-                io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Pre-flight exception: ${e.message}")
+                logToCollector("[SERVICE] Pre-flight exception: ${e.message}")
                 startLocalOnlyMode()
                 return
             }
@@ -151,14 +170,14 @@ class GooseService : Service() {
 
             gooseProcess = processBuilder.start()
             Log.i(TAG, "Process started, pid=${gooseProcess?.toString()}")
-            io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Process started: ${command.joinToString(" ")}")
+            logToCollector("[SERVICE] Process started: ${command.joinToString(" ")}")
 
             // Give the process a moment to crash (if it's going to)
             kotlinx.coroutines.delay(500)
             if (gooseProcess?.isAlive != true) {
                 val exitCode = try { gooseProcess?.exitValue() } catch (e: Exception) { -1 }
                 Log.e(TAG, "Process died immediately! exitCode=$exitCode")
-                io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Process died immediately! exitCode=$exitCode")
+                logToCollector("[SERVICE] Process died immediately! exitCode=$exitCode")
 
                 // Try to read any error output
                 val errorOutput = try {
@@ -166,7 +185,7 @@ class GooseService : Service() {
                 } catch (e: Exception) { "" }
                 if (errorOutput.isNotBlank()) {
                     Log.e(TAG, "Process error output: $errorOutput")
-                    io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Error: $errorOutput")
+                    logToCollector("[SERVICE] Error: $errorOutput")
                 }
 
                 // Fall back immediately
@@ -180,7 +199,7 @@ class GooseService : Service() {
                     gooseProcess?.inputStream?.bufferedReader()?.useLines { lines ->
                         lines.forEach { line ->
                             Log.d(TAG, "[goose] $line")
-                            io.github.gooseandroid.ui.doctor.LogCollector.addLine(line)
+                            logToCollector(line)
                         }
                     }
                 } catch (e: IOException) {
@@ -194,7 +213,7 @@ class GooseService : Service() {
                     gooseProcess?.errorStream?.bufferedReader()?.useLines { lines ->
                         lines.forEach { line ->
                             Log.d(TAG, "[goose stderr] $line")
-                            io.github.gooseandroid.ui.doctor.LogCollector.addLine("[ERR] $line")
+                            logToCollector("[ERR] $line")
                         }
                     }
                 } catch (e: IOException) {
@@ -221,7 +240,7 @@ class GooseService : Service() {
                 val exitCode = try { gooseProcess?.exitValue() } catch (e: IllegalThreadStateException) { null }
                 val processAlive = gooseProcess?.isAlive == true
                 Log.e(TAG, "Process alive=$processAlive, exitCode=$exitCode")
-                io.github.gooseandroid.ui.doctor.LogCollector.addLine(
+                logToCollector(
                     "[SERVICE] Goose failed to start. Process alive=$processAlive, exitCode=$exitCode"
                 )
 
@@ -234,7 +253,7 @@ class GooseService : Service() {
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start goose", e)
-            io.github.gooseandroid.ui.doctor.LogCollector.addLine("[SERVICE] Exception: ${e.message}")
+            logToCollector("[SERVICE] Exception: ${e.message}")
             updateNotification("Goose error: ${e.message}")
 
             // CRITICAL: Fall back to local-only mode so cloud API still works
@@ -248,14 +267,21 @@ class GooseService : Service() {
      * with downloaded local models, or show a helpful setup screen.
      */
     private suspend fun startLocalOnlyMode() {
-        val modelManager = LocalModelManager(this)
-        val server = LiteRTInferenceServer(modelManager)
-        liteRTServer = server                       // (#1) store reference for cleanup
-        port = server.start()
-        GoosePortHolder.port = port
-        GoosePortHolder.localOnlyMode = true
-        Log.i(TAG, "Local-only mode active on port $port")
-        updateNotification("Goose (local mode) — download models or configure cloud API")
+        try {
+            val modelManager = LocalModelManager(this)
+            val server = LiteRTInferenceServer(modelManager)
+            liteRTServer = server
+            port = server.start()
+            GoosePortHolder.port = port
+            GoosePortHolder.localOnlyMode = true
+            Log.i(TAG, "Local-only mode active on port $port")
+            updateNotification("Goose (cloud API mode)")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start local-only mode", e)
+            // Even if LiteRT server fails, set localOnlyMode so cloud API path is used
+            GoosePortHolder.localOnlyMode = true
+            updateNotification("Goose (cloud API mode)")
+        }
     }
 
     private fun extractBinary(): File? {
@@ -395,10 +421,19 @@ class GooseService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Use Android's built-in icon as fallback if custom icon fails
+        val iconRes = try {
+            // Verify our icon resource exists
+            resources.getDrawable(R.drawable.ic_notification, theme)
+            R.drawable.ic_notification
+        } catch (e: Exception) {
+            android.R.drawable.ic_dialog_info
+        }
+
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Goose")
             .setContentText(text)
-            .setSmallIcon(R.drawable.ic_notification)   // (#6) use proper app icon
+            .setSmallIcon(iconRes)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
