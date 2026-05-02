@@ -79,6 +79,7 @@ val PROVIDER_CATALOG = listOf(
         apiKeySettingsKey = "anthropic_api_key",
         models = listOf(
             ModelOption("claude-sonnet-4-20250514", "Claude Sonnet 4"),
+            ModelOption("claude-opus-4-20250514", "Claude Opus 4"),
             ModelOption("claude-3-5-haiku-20241022", "Claude 3.5 Haiku")
         )
     ),
@@ -90,7 +91,8 @@ val PROVIDER_CATALOG = listOf(
         models = listOf(
             ModelOption("gpt-4o", "GPT-4o"),
             ModelOption("gpt-4o-mini", "GPT-4o Mini"),
-            ModelOption("o3-mini", "o3-mini")
+            ModelOption("o3-mini", "o3 Mini"),
+            ModelOption("o4-mini", "o4 Mini")
         )
     ),
     ProviderInfo(
@@ -99,8 +101,9 @@ val PROVIDER_CATALOG = listOf(
         description = "Gemini models",
         apiKeySettingsKey = "google_api_key",
         models = listOf(
-            ModelOption("gemini-2.0-flash", "Gemini 2.0 Flash"),
-            ModelOption("gemini-2.5-pro-preview-06-05", "Gemini 2.5 Pro")
+            ModelOption("gemini-2.5-flash", "Gemini 2.5 Flash"),
+            ModelOption("gemini-2.5-pro", "Gemini 2.5 Pro"),
+            ModelOption("gemini-2.0-flash", "Gemini 2.0 Flash")
         )
     ),
     ProviderInfo(

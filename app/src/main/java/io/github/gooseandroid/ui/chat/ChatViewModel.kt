@@ -362,34 +362,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.value = _messages.value + userMsg
         sessionManager.generateAutoTitle(text)
 
-        viewModelScope.launch {
+        streamingJob?.cancel()
+        streamingJob = viewModelScope.launch {
             _isGenerating.value = true
             _streamingContent.value = ""
             _thinkingContent.value = ""
 
             try {
-                if (!GoosePortHolder.localOnlyMode && acpClient != null) {
-                    acpClient!!.sendPrompt(text)
-                } else {
-                    val assistantId = addAssistantPlaceholder()
-                    val found = localModelClient.handleLocalMessage(
-                        _messages.value, activeSystemPrompt, createStreamingCallbacks(assistantId)
-                    )
-                    if (!found) {
-                        removeMessage(assistantId)
-                        addSystemMessage(
-                            "No model configured.\n\n" +
-                            "Go to Settings to either:\n" +
-                            "- Add a cloud API key (Anthropic, OpenAI, Google, Mistral, OpenRouter)\n" +
-                            "- Configure a custom OpenAI-compatible endpoint\n" +
-                            "- Download a local model for offline use"
+                kotlinx.coroutines.withTimeout(120_000L) {
+                    if (!GoosePortHolder.localOnlyMode && acpClient != null) {
+                        acpClient!!.sendPrompt(text)
+                    } else {
+                        val assistantId = addAssistantPlaceholder()
+                        val found = localModelClient.handleLocalMessage(
+                            _messages.value, activeSystemPrompt, createStreamingCallbacks(assistantId)
                         )
-                        _isGenerating.value = false
+                        if (!found) {
+                            removeMessage(assistantId)
+                            addSystemMessage(
+                                "No model configured.\n\n" +
+                                "Go to Settings to add a cloud API key or download a local model."
+                            )
+                        }
                     }
                 }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                Log.e(TAG, "Message timed out after 120s", e)
+                addSystemMessage("Request timed out. Check your network connection and try again.")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.d(TAG, "Message cancelled")
+                throw e // Don't swallow cancellation
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending message", e)
                 addSystemMessage("Error: ${e.message}")
+            } finally {
                 _isGenerating.value = false
             }
         }
@@ -423,32 +429,38 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.value = _messages.value + userMsg
         sessionManager.generateAutoTitle(text.ifBlank { attachments.firstOrNull()?.name ?: "Attachment" })
 
-        viewModelScope.launch {
+        streamingJob?.cancel()
+        streamingJob = viewModelScope.launch {
             _isGenerating.value = true
             _streamingContent.value = ""
             _thinkingContent.value = ""
 
             try {
-                if (!GoosePortHolder.localOnlyMode && acpClient != null) {
-                    val base64Images = imageAttachments.map { it.content }
-                    acpClient!!.sendPrompt(contentBuilder.toString(), base64Images)
-                } else {
-                    val assistantId = addAssistantPlaceholder()
-                    val found = localModelClient.handleLocalMessageWithAttachments(
-                        _messages.value, imageAttachments, activeSystemPrompt,
-                        createStreamingCallbacks(assistantId)
-                    )
-                    if (!found) {
-                        removeMessage(assistantId)
-                        addSystemMessage(
-                            "No model configured.\n\nGo to Settings to configure a provider."
+                kotlinx.coroutines.withTimeout(120_000L) {
+                    if (!GoosePortHolder.localOnlyMode && acpClient != null) {
+                        val base64Images = imageAttachments.map { it.content }
+                        acpClient!!.sendPrompt(contentBuilder.toString(), base64Images)
+                    } else {
+                        val assistantId = addAssistantPlaceholder()
+                        val found = localModelClient.handleLocalMessageWithAttachments(
+                            _messages.value, imageAttachments, activeSystemPrompt,
+                            createStreamingCallbacks(assistantId)
                         )
-                        _isGenerating.value = false
+                        if (!found) {
+                            removeMessage(assistantId)
+                            addSystemMessage("No model configured.\n\nGo to Settings to configure a provider.")
+                        }
                     }
                 }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                Log.e(TAG, "Message with attachments timed out", e)
+                addSystemMessage("Request timed out. Check your network connection and try again.")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending message with attachments", e)
                 addSystemMessage("Error: ${e.message}")
+            } finally {
                 _isGenerating.value = false
             }
         }

@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.toArgb
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
 import kotlinx.coroutines.FlowPreview
@@ -274,6 +275,43 @@ fun SettingsScreen(
                 )
             }
 
+            // ==================== CODEX OAUTH ====================
+            item {
+                var showCodexDialog by remember { mutableStateOf(false) }
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showCodexDialog = true }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(Icons.Filled.Login, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Sign in with Codex", style = MaterialTheme.typography.titleSmall)
+                            Text("GitHub Copilot / Codex OAuth device flow", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                if (showCodexDialog) {
+                    io.github.gooseandroid.ui.providers.OAuthDeviceFlowDialog(
+                        providerName = "GitHub Codex",
+                        deviceAuthUrl = "https://github.com/login/device/code",
+                        tokenUrl = "https://github.com/login/oauth/access_token",
+                        clientId = "Iv1.b507a08c87ecfe98",
+                        scope = "read:user",
+                        onTokenReceived = { token ->
+                            scope.launch {
+                                settingsStore.setString("codex_oauth_token", token)
+                            }
+                            showCodexDialog = false
+                        },
+                        onDismiss = { showCodexDialog = false }
+                    )
+                }
+            }
+
             // ==================== EXTENSIONS SECTION ====================
             item {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -419,6 +457,11 @@ fun SettingsScreen(
                                 label = { Text("Light") }
                             )
                         }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Accent Color", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        AccentColorRow(settingsStore = settingsStore, scope = scope)
                     }
                 }
             }
@@ -895,6 +938,58 @@ private fun NavigationCard(
                 contentDescription = "Navigate",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+// ==================== ACCENT COLOR PICKER ====================
+
+private data class AccentSwatch(val name: String, val color: androidx.compose.ui.graphics.Color)
+
+private val ACCENT_SWATCHES = listOf(
+    AccentSwatch("Orange", androidx.compose.ui.graphics.Color(0xFFFF6B35)),
+    AccentSwatch("White", androidx.compose.ui.graphics.Color(0xFFE0E0E0)),
+    AccentSwatch("Grey", androidx.compose.ui.graphics.Color(0xFF9E9E9E)),
+    AccentSwatch("Black", androidx.compose.ui.graphics.Color(0xFF424242)),
+    AccentSwatch("Blue", androidx.compose.ui.graphics.Color(0xFF2196F3)),
+    AccentSwatch("Green", androidx.compose.ui.graphics.Color(0xFF00D632)),
+    AccentSwatch("Purple", androidx.compose.ui.graphics.Color(0xFF9C27B0)),
+)
+
+@Composable
+private fun AccentColorRow(
+    settingsStore: SettingsStore,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
+    val defaultOrange = androidx.compose.ui.graphics.Color(0xFFFF6B35).toArgb()
+    val currentAccent by settingsStore.getInt(
+        SettingsKeys.PRIMARY_COLOR, defaultOrange
+    ).collectAsState(initial = defaultOrange)
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ACCENT_SWATCHES.forEach { swatch ->
+            val swatchArgb = swatch.color.toArgb()
+            val isSelected = currentAccent == swatchArgb
+            androidx.compose.foundation.Canvas(
+                modifier = Modifier
+                    .size(if (isSelected) 36.dp else 30.dp)
+                    .clickable {
+                        scope.launch {
+                            settingsStore.setInt(SettingsKeys.PRIMARY_COLOR, swatchArgb)
+                        }
+                    }
+            ) {
+                drawCircle(color = swatch.color)
+                if (isSelected) {
+                    drawCircle(
+                        color = androidx.compose.ui.graphics.Color.White,
+                        radius = size.minDimension / 5f
+                    )
+                }
+            }
         }
     }
 }

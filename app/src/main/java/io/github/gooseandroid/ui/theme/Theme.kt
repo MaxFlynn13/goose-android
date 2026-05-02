@@ -23,19 +23,24 @@ fun GooseTheme(content: @Composable () -> Unit) {
     val settingsStore = remember { SettingsStore(context) }
     val themePref by settingsStore.getString(SettingsKeys.THEME_MODE, "SYSTEM")
         .collectAsState(initial = "SYSTEM")
+    val defaultAccent = Color(0xFFFF6B35).toArgb()
+    val accentColorInt by settingsStore.getInt(SettingsKeys.PRIMARY_COLOR, defaultAccent)
+        .collectAsState(initial = defaultAccent)
 
     val useDarkTheme = when (themePref) {
         "LIGHT" -> false
         "DARK" -> true
-        else -> isSystemInDarkTheme() // "SYSTEM" or any unknown value
+        else -> isSystemInDarkTheme()
     }
+
+    val accent = Color(accentColorInt)
 
     val colorScheme = if (useDarkTheme) {
         darkColorScheme(
-            primary = Color(0xFFFF6B35),
+            primary = accent,
             onPrimary = Color.White,
-            primaryContainer = Color(0xFF3D2010),
-            onPrimaryContainer = Color(0xFFFFB899),
+            primaryContainer = accent.copy(alpha = 0.15f),
+            onPrimaryContainer = accent,
             secondary = Color(0xFF8ECAE6),
             onSecondary = Color.Black,
             tertiary = Color(0xFF00D632),
@@ -53,10 +58,10 @@ fun GooseTheme(content: @Composable () -> Unit) {
         )
     } else {
         lightColorScheme(
-            primary = Color(0xFFFF6B35),
+            primary = accent,
             onPrimary = Color.White,
-            primaryContainer = Color(0xFFFFDBCC),
-            onPrimaryContainer = Color(0xFF3D1600),
+            primaryContainer = accent.copy(alpha = 0.08f),
+            onPrimaryContainer = accent,
             secondary = Color(0xFF625B71),
             onSecondary = Color.White,
             tertiary = Color(0xFF7D5260),
