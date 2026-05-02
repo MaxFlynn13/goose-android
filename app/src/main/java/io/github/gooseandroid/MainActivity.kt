@@ -14,6 +14,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,15 +23,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-
 import io.github.gooseandroid.ui.GooseNavigation
 import io.github.gooseandroid.ui.theme.GooseTheme
 
-/**
- * Main activity — native Jetpack Compose UI for Goose.
- *
- * No WebView. Direct Kotlin → WebSocket → goose serve.
- */
 class MainActivity : ComponentActivity() {
 
     companion object {
@@ -60,25 +56,37 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
         requestNotificationPermission()
 
-        // Start goose service
         val serviceIntent = Intent(this, GooseService::class.java)
         startForegroundService(serviceIntent)
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         setContent {
             GooseTheme {
-                GooseApp(
-                    serviceReady = serviceReady.value,
-                    serviceError = serviceError.value,
-                    onRetry = { restartService() }
-                )
+                // Scaffold handles system bar insets properly
+                Scaffold(
+                    modifier = Modifier.fillMaxSize()
+                ) { innerPadding ->
+                    Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                        when {
+                            serviceError.value != null -> ErrorScreen(serviceError.value!!) { restartService() }
+                            !serviceReady.value -> LoadingScreen()
+                            else -> {
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .consumeWindowInsets(innerPadding)
+                                ) {
+                                    GooseNavigation()
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        // Poll for service readiness
         pollServiceReady()
     }
 
@@ -86,15 +94,11 @@ class MainActivity : ComponentActivity() {
         Thread {
             val timeout = 15_000L
             val start = System.currentTimeMillis()
-
             while (System.currentTimeMillis() - start < timeout) {
-                // Check if local-only mode was activated (binary missing)
                 if (GoosePortHolder.localOnlyMode) {
-                    Log.i(TAG, "Local-only mode detected — showing UI")
                     runOnUiThread { serviceReady.value = true }
                     return@Thread
                 }
-
                 val service = gooseService
                 if (service != null && service.isRunning()) {
                     GoosePortHolder.port = service.getPort()
@@ -103,13 +107,11 @@ class MainActivity : ComponentActivity() {
                 }
                 Thread.sleep(200)
             }
-
-            // If we timed out but local-only mode is active, still show UI
             if (GoosePortHolder.localOnlyMode) {
                 runOnUiThread { serviceReady.value = true }
             } else {
                 runOnUiThread {
-                    serviceError.value = "Goose backend not available. Configure a cloud API key in Settings, or download a local model."
+                    serviceError.value = "Goose backend not available.\nConfigure a cloud API key or download a local model in Settings."
                 }
             }
         }.start()
@@ -118,15 +120,12 @@ class MainActivity : ComponentActivity() {
     private fun restartService() {
         serviceError.value = null
         serviceReady.value = false
-
         if (serviceBound) {
             unbindService(serviceConnection)
             serviceBound = false
         }
-
         val stopIntent = Intent(this, GooseService::class.java)
         stopService(stopIntent)
-
         Thread {
             Thread.sleep(1000)
             runOnUiThread {
@@ -148,90 +147,37 @@ class MainActivity : ComponentActivity() {
 
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                    NOTIFICATION_PERMISSION_CODE
-                )
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_CODE)
             }
         }
     }
 }
 
 @Composable
-fun GooseApp(
-    serviceReady: Boolean,
-    serviceError: String?,
-    onRetry: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
-        when {
-            serviceError != null -> ErrorScreen(serviceError, onRetry)
-            !serviceReady -> LoadingScreen()
-            else -> GooseNavigation()
+private fun LoadingScreen() {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(modifier = Modifier.size(48.dp))
+            Spacer(modifier = Modifier.height(24.dp))
+            Text("Starting Goose...", style = MaterialTheme.typography.headlineSmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text("Initializing backend", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
-private fun LoadingScreen() {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(48.dp),
-            color = MaterialTheme.colorScheme.primary
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        Text(
-            "Starting Goose...",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onBackground
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            "Initializing the AI agent backend",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
 private fun ErrorScreen(error: String, onRetry: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            "!!",
-            style = MaterialTheme.typography.displayLarge
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            "Failed to Start",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.error
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            error,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 32.dp)
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(onClick = onRetry) {
-            Text("Retry")
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+            Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
+            Spacer(modifier = Modifier.height(16.dp))
+            Text("Setup Required", style = MaterialTheme.typography.headlineSmall)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(onClick = onRetry) { Text("Retry") }
         }
     }
 }

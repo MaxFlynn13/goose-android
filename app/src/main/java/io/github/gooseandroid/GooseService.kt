@@ -17,7 +17,7 @@ import java.net.ServerSocket
  * Foreground service that manages the goose binary lifecycle.
  *
  * Spawns `goose serve --host 127.0.0.1 --port PORT` and keeps it alive
- * as long as the app is in use. The frontend WebView connects to this
+ * as long as the app is in use. The Compose UI connects to this
  * local server via WebSocket.
  */
 class GooseService : Service() {

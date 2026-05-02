@@ -1,5 +1,10 @@
 package io.github.gooseandroid.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -7,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -21,17 +27,24 @@ import io.github.gooseandroid.ui.chat.ChatScreen
 import io.github.gooseandroid.ui.chat.ChatViewModel
 import io.github.gooseandroid.ui.extensions.ExtensionsScreen
 import io.github.gooseandroid.ui.history.HistoryScreen
-import io.github.gooseandroid.ui.recipes.RecipesScreen
 import io.github.gooseandroid.ui.models.ModelsScreen
-import io.github.gooseandroid.ui.panel.SidePanel
 import io.github.gooseandroid.ui.panel.PanelSide
+import io.github.gooseandroid.ui.panel.SidePanel
+import io.github.gooseandroid.ui.recipes.RecipesScreen
 import io.github.gooseandroid.ui.settings.AppTheme
 import io.github.gooseandroid.ui.settings.AppearanceSettingsScreen
 import io.github.gooseandroid.ui.settings.SettingsScreen
 
 /**
- * Top-level navigation with side panel.
- * Reads panel side from persisted settings so changes take effect immediately.
+ * Top-level navigation for the Goose AI Android app.
+ *
+ * Uses a drawer-style overlay pattern: the main content always fills the
+ * entire screen, and the SidePanel slides over it with a scrim backdrop
+ * when opened. Panel side (left / right) is read from DataStore so the
+ * user's preference is applied immediately on launch.
+ *
+ * ChatViewModel is created here and shared with ChatScreen so conversation
+ * state survives navigation between destinations.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,35 +59,33 @@ fun GooseNavigation() {
     var panelOpen by remember { mutableStateOf(false) }
     var appTheme by remember { mutableStateOf(AppTheme()) }
 
-    // Read panel side from persisted settings
-    val panelSideStr by settingsStore.getString(SettingsKeys.PANEL_SIDE, "LEFT").collectAsState(initial = "LEFT")
+    // Read panel side from persisted DataStore settings
+    val panelSideStr by settingsStore
+        .getString(SettingsKeys.PANEL_SIDE, "LEFT")
+        .collectAsState(initial = "LEFT")
     val panelSide = if (panelSideStr == "RIGHT") PanelSide.RIGHT else PanelSide.LEFT
 
+    // Animated scrim alpha for smooth open/close transitions
+    val scrimAlpha by animateFloatAsState(
+        targetValue = if (panelOpen) 0.5f else 0f,
+        animationSpec = tween(durationMillis = 250),
+        label = "scrimAlpha"
+    )
+
     Box(modifier = Modifier.fillMaxSize()) {
-        // Main content
+        // ---- Main content: always fills the full screen ----
         NavHost(
             navController = navController,
             startDestination = "chat",
             modifier = Modifier.fillMaxSize()
         ) {
+            // Chat gets special treatment — no wrapping Scaffold here.
+            // ChatScreen manages its own layout including its top bar.
             composable("chat") {
-                Scaffold(
-                    topBar = {
-                        TopAppBar(
-                            title = { Text("Goose") },
-                            navigationIcon = {
-                                IconButton(onClick = { panelOpen = !panelOpen }) {
-                                    Icon(Icons.Default.Menu, contentDescription = "Menu")
-                                }
-                            }
-                        )
-                    }
-                ) { padding ->
-                    ChatScreen(
-                        viewModel = chatViewModel,
-                        modifier = Modifier.padding(padding)
-                    )
-                }
+                ChatScreen(
+                    viewModel = chatViewModel,
+                    onMenuClick = { panelOpen = true }
+                )
             }
 
             composable("brain") {
@@ -125,37 +136,24 @@ fun GooseNavigation() {
             }
 
             composable("scheduler") {
-                Scaffold(
-                    topBar = {
-                        TopAppBar(title = { Text("Scheduler") })
-                    }
-                ) { padding ->
-                    Box(
-                        modifier = Modifier.padding(padding).fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                Icons.Default.Schedule,
-                                contentDescription = null,
-                                modifier = Modifier.size(64.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text("Scheduler", style = MaterialTheme.typography.titleMedium)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                "Schedule recurring tasks for Goose to run automatically.\nComing in a future update.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
+                SchedulerPlaceholder(onBack = { navController.popBackStack() })
             }
         }
 
-        // Side panel overlay
+        // ---- Scrim: visible only when the panel is open ----
+        if (scrimAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = scrimAlpha))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { panelOpen = false }
+            )
+        }
+
+        // ---- Side panel: slides over content ----
         SidePanel(
             isOpen = panelOpen,
             onToggle = { panelOpen = !panelOpen },
@@ -172,5 +170,49 @@ fun GooseNavigation() {
                 }
             }
         )
+    }
+}
+
+/**
+ * Placeholder screen for the Scheduler feature (not yet implemented).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SchedulerPlaceholder(onBack: () -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Scheduler") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.Schedule,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Scheduler", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Schedule recurring tasks for Goose to run automatically.\nComing in a future update.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
