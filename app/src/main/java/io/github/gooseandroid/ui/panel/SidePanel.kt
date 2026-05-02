@@ -40,11 +40,13 @@ data class PanelModule(
 val PANEL_MODULES = listOf(
     PanelModule("chat", "Chat", Icons.AutoMirrored.Filled.Chat, "chat"),
     PanelModule("history", "History", Icons.Default.History, "history"),
-    PanelModule("recipes", "Recipes", Icons.Default.AutoAwesome, "recipes"),
+    PanelModule("agents", "Agents", Icons.Default.Face, "agents"),
+    PanelModule("projects", "Projects", Icons.Default.Folder, "projects"),
+    PanelModule("skills", "Skills", Icons.Default.AutoAwesome, "skills"),
     PanelModule("brain", "Brain", Icons.Default.Psychology, "brain"),
     PanelModule("extensions", "Extensions", Icons.Default.Extension, "extensions"),
     PanelModule("models", "Models", Icons.Default.Memory, "models"),
-    PanelModule("scheduler", "Scheduler", Icons.Default.Schedule, "scheduler"),
+    PanelModule("doctor", "Doctor", Icons.Default.HealthAndSafety, "doctor"),
     PanelModule("settings", "Settings", Icons.Default.Settings, "settings"),
 )
 

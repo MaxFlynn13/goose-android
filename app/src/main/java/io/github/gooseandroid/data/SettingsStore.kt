@@ -47,6 +47,9 @@ object SettingsKeys {
     const val EXTENSION_DEVELOPER = "ext_developer"
     const val EXTENSION_MEMORY = "ext_memory"
 
+    // Agents/Personas
+    const val ACTIVE_PERSONA_ID = "active_persona_id"
+
     // General
     const val AUTO_COMPACT = "auto_compact"
     const val WORKING_DIRECTORY = "working_directory"

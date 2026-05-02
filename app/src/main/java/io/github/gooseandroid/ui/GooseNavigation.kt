@@ -22,18 +22,21 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
+import io.github.gooseandroid.ui.agents.AgentsScreen
 import io.github.gooseandroid.ui.brain.BrainScreen
 import io.github.gooseandroid.ui.chat.ChatScreen
 import io.github.gooseandroid.ui.chat.ChatViewModel
+import io.github.gooseandroid.ui.doctor.DoctorScreen
 import io.github.gooseandroid.ui.extensions.ExtensionsScreen
 import io.github.gooseandroid.ui.history.HistoryScreen
 import io.github.gooseandroid.ui.models.ModelsScreen
 import io.github.gooseandroid.ui.panel.PanelSide
 import io.github.gooseandroid.ui.panel.SidePanel
-import io.github.gooseandroid.ui.recipes.RecipesScreen
+import io.github.gooseandroid.ui.projects.ProjectsScreen
 import io.github.gooseandroid.ui.settings.AppTheme
 import io.github.gooseandroid.ui.settings.AppearanceSettingsScreen
 import io.github.gooseandroid.ui.settings.SettingsScreen
+import io.github.gooseandroid.ui.skills.SkillsScreen
 
 /**
  * Top-level navigation for the Goose AI Android app.
@@ -126,11 +129,36 @@ fun GooseNavigation() {
                 )
             }
 
-            composable("recipes") {
-                RecipesScreen(
+            composable("agents") {
+                AgentsScreen(
                     onBack = { navController.popBackStack() },
-                    onUseRecipe = { recipe ->
-                        chatViewModel.prefillPrompt(recipe.prompt)
+                    onSelectPersona = { persona ->
+                        // Set persona as active and apply to chat
+                        chatViewModel.setActivePersona(persona.id, persona.displayName, persona.systemPrompt)
+                        navController.navigate("chat") {
+                            popUpTo("chat") { inclusive = true }
+                        }
+                    }
+                )
+            }
+
+            composable("projects") {
+                ProjectsScreen(
+                    onBack = { navController.popBackStack() },
+                    onStartChatInProject = { project ->
+                        chatViewModel.startProjectSession(project.id, project.name, project.instructions)
+                        navController.navigate("chat") {
+                            popUpTo("chat") { inclusive = true }
+                        }
+                    }
+                )
+            }
+
+            composable("skills") {
+                SkillsScreen(
+                    onBack = { navController.popBackStack() },
+                    onUseSkill = { skill ->
+                        chatViewModel.prefillPrompt(skill.instructions)
                         navController.navigate("chat") {
                             popUpTo("chat") { inclusive = true }
                         }
@@ -165,6 +193,10 @@ fun GooseNavigation() {
                     onThemeChanged = { appTheme = it },
                     onBack = { navController.popBackStack() }
                 )
+            }
+
+            composable("doctor") {
+                DoctorScreen(onBack = { navController.popBackStack() })
             }
 
             composable("scheduler") {

@@ -86,6 +86,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var acpClient: AcpClient? = null
     private var streamingJob: Job? = null
+    private var activeSystemPrompt: String = ""
 
     // ─── Initialization ─────────────────────────────────────────────────────────
 
@@ -976,6 +977,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearPendingPrompt() {
         _pendingPrompt.value = null
+    }
+
+    /**
+     * Set the active persona for chat. Updates the system prompt used in conversations.
+     */
+    fun setActivePersona(personaId: String, name: String, systemPrompt: String) {
+        viewModelScope.launch {
+            settingsStore.setString("active_persona_id", personaId)
+            activeSystemPrompt = systemPrompt
+            createNewSession()
+            addSystemMessage("Switched to persona: $name")
+        }
+    }
+
+    /**
+     * Start a new chat session scoped to a project.
+     */
+    fun startProjectSession(projectId: String, projectName: String, instructions: String) {
+        viewModelScope.launch {
+            activeSystemPrompt = instructions
+            createNewSession()
+            _currentSessionTitle.value = projectName
+            addSystemMessage("Started project session: $projectName")
+        }
     }
 
     fun cancelGeneration() {
