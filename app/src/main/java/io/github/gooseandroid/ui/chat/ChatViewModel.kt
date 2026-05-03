@@ -6,55 +6,45 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import io.github.gooseandroid.GoosePortHolder
-import io.github.gooseandroid.LocalModelManager
-import io.github.gooseandroid.acp.AcpClient
-import io.github.gooseandroid.acp.AcpNotificationHandler
 import io.github.gooseandroid.data.SessionRepository
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
-import io.github.gooseandroid.network.CloudApiClient
-import io.github.gooseandroid.network.LocalModelClient
+import io.github.gooseandroid.engine.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import java.util.UUID
 
 /**
- * ViewModel for the chat screen — the brain of the Goose AI Android app.
+ * ViewModel for the chat screen.
  *
- * Delegates to extracted helper classes:
- * - SessionRepository: file I/O for sessions and messages
- * - CloudApiClient: streaming cloud API calls
- * - LocalModelClient: local model inference
- * - AcpNotificationHandler: ACP notification parsing
- * - SessionManager: session lifecycle management
+ * Uses GooseEngineManager for all LLM communication with automatic failover
+ * between the Rust binary engine and Kotlin native engine.
  */
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "ChatViewModel"
-
         val PROVIDER_MODELS: Map<String, List<String>> = PROVIDER_CATALOG
             .associate { it.id to it.models.map { m -> m.id } }
     }
 
     private val appContext = application.applicationContext
     private val settingsStore = SettingsStore(application)
-    private val modelManager = LocalModelManager(application)
 
-    // ─── Helper Classes ─────────────────────────────────────────────────────────
+    // ─── Engine ─────────────────────────────────────────────────────────────────
+    private val engineManager = GooseEngineManager(appContext)
+    val engineInfo: StateFlow<String> = engineManager.engineInfo
 
+    // ─── Helpers ────────────────────────────────────────────────────────────────
     private val sessionRepository = SessionRepository(appContext)
-    private val cloudApiClient = CloudApiClient(settingsStore)
-    private val localModelClient = LocalModelClient(settingsStore, modelManager, cloudApiClient)
-    private val acpNotificationHandler = AcpNotificationHandler()
     private val sessionManager = SessionManager(sessionRepository, settingsStore)
 
-    // ─── State Flows ────────────────────────────────────────────────────────────
-
+    // ─── State ──────────────────────────────────────────────────────────────────
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
@@ -95,17 +85,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         .map { msgs -> msgs.sumOf { it.content.length } / 4 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
-    private var acpClient: AcpClient? = null
     private var streamingJob: Job? = null
-    private var notificationJob: Job? = null
     private var activeSystemPrompt: String = ""
 
-    // ─── Initialization ─────────────────────────────────────────────────────────
+    // ─── Init ───────────────────────────────────────────────────────────────────
 
     init {
         setupCallbacks()
         loadSessions()
-        connectToGoose()
+        viewModelScope.launch {
+            engineManager.initialize()
+            if (_sessions.value.isEmpty()) createNewSession()
+        }
     }
 
     private fun setupCallbacks() {
@@ -121,20 +112,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             override fun setIsGenerating(generating: Boolean) { _isGenerating.value = generating }
             override fun saveSessions() { this@ChatViewModel.saveSessions() }
         })
-
-        acpNotificationHandler.setCallbacks(object : AcpNotificationHandler.Callbacks {
-            override fun onStreamingContent(content: String, isComplete: Boolean) {
-                handleAcpStreamingContent(content, isComplete)
-            }
-            override fun onToolCallStart(name: String, arguments: String?) {
-                _toolCalls.value = AcpNotificationHandler.addToolCallStart(_toolCalls.value, name, arguments ?: "")
-                updateLastAssistantToolCalls()
-            }
-            override fun onToolCallEnd(name: String, output: String, isError: Boolean) {
-                _toolCalls.value = AcpNotificationHandler.updateToolCallEnd(_toolCalls.value, name, output, isError)
-                updateLastAssistantToolCalls()
-            }
-        })
     }
 
     private fun loadSessions() {
@@ -146,97 +123,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     val latest = loaded.maxByOrNull { it.createdAt }
                     latest?.let {
                         _currentSessionId.value = it.id
-                        val msgs = sessionRepository.loadMessagesFromDisk(it.id)
-                        _messages.value = msgs
+                        _messages.value = sessionRepository.loadMessagesFromDisk(it.id)
                     }
                 }
             }
         }
     }
 
-    private fun connectToGoose() {
-        viewModelScope.launch {
-            if (GoosePortHolder.localOnlyMode) {
-                Log.i(TAG, "Running in local-only mode")
-                if (_sessions.value.isEmpty()) {
-                    createNewSession()
-                } else {
-                    val latest = _sessions.value.maxByOrNull { it.createdAt }
-                    latest?.let { switchSession(it.id) }
-                }
-                return@launch
-            }
+    // ─── Session Management ─────────────────────────────────────────────────────
 
-            val port = GoosePortHolder.port
-            val url = "ws://127.0.0.1:$port/acp"
-            Log.i(TAG, "Connecting to goose at $url")
-
-            val client = AcpClient(url)
-            acpClient = client
-
-            // Fix #6: Cancel previous notification collector before starting a new one
-            notificationJob?.cancel()
-            notificationJob = launch {
-                client.notifications.collect { notification ->
-                    acpNotificationHandler.handleAcpNotification(notification)
-                }
-            }
-
-            val result = client.connect()
-            result.onSuccess {
-                Log.i(TAG, "Connected to goose, creating session...")
-                createNewSession()
-                val sessionResult = client.newSession()
-                sessionResult.onSuccess { sessionId ->
-                    Log.i(TAG, "ACP Session created: $sessionId")
-                }.onFailure { error ->
-                    Log.e(TAG, "Failed to create ACP session", error)
-                    // ACP session failed — null out client so cloud fallback is used
-                    acpClient = null
-                    client.disconnect()
-                    addSystemMessage("Goose agent unavailable — using direct LLM mode.\nYou can chat normally but tool use (shell, edit, file ops) requires the Goose backend.")
-                }
-            }.onFailure { error ->
-                Log.e(TAG, "Failed to connect to goose backend", error)
-                // Connection failed — null out client so cloud fallback is used
-                acpClient = null
-                if (_sessions.value.isEmpty()) createNewSession()
-                addSystemMessage(
-                    "Goose agent unavailable — using direct LLM mode.\n" +
-                    "Chat works normally. Tool use (shell, edit, file ops) requires the Goose backend.\n\n" +
-                    "Check Logs screen for details on why the backend failed to start."
-                )
-            }
-        }
-    }
-
-    // ─── Public Methods (delegating) ────────────────────────────────────────────
-
-    // Session ID and state are set synchronously BEFORE any coroutine launch.
     fun createNewSession() {
         val newId = UUID.randomUUID().toString()
-        Log.i(TAG, "createNewSession: id=$newId")
-
-        val newSession = SessionInfo(
-            id = newId,
-            title = "New Chat",
-            createdAt = System.currentTimeMillis()
-        )
-
-        // Synchronous state updates — _currentSessionId is set BEFORE returning
+        val newSession = SessionInfo(id = newId, title = "New Chat", createdAt = System.currentTimeMillis())
         _currentSessionId.value = newId
         _sessions.value = _sessions.value + newSession
         _messages.value = emptyList()
         _toolCalls.value = emptyList()
         _streamingContent.value = ""
         _isLoadingSession.value = false
-
-        Log.i(TAG, "createNewSession: state updated synchronously, currentSessionId=${_currentSessionId.value}")
-
-        // Only the disk I/O is async
-        viewModelScope.launch(Dispatchers.IO) {
-            sessionManager.persistNewSession(newSession)
-        }
+        viewModelScope.launch(Dispatchers.IO) { sessionManager.persistNewSession(newSession) }
     }
 
     fun switchSession(sessionId: String) {
@@ -247,43 +152,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteSession(sessionId: String) {
-        viewModelScope.launch { sessionManager.deleteSession(sessionId) }
-    }
-
-    fun renameSession(sessionId: String, newTitle: String) {
-        viewModelScope.launch { sessionManager.renameSession(sessionId, newTitle) }
-    }
+    fun deleteSession(sessionId: String) { viewModelScope.launch { sessionManager.deleteSession(sessionId) } }
+    fun renameSession(sessionId: String, newTitle: String) { viewModelScope.launch { sessionManager.renameSession(sessionId, newTitle) } }
 
     fun forkSession(sessionId: String) {
-        viewModelScope.launch {
-            val forkedId = sessionManager.forkSession(sessionId)
-            _currentSessionId.value = forkedId
-        }
+        viewModelScope.launch { _currentSessionId.value = sessionManager.forkSession(sessionId) }
     }
 
     fun exportSession(sessionId: String) {
-        viewModelScope.launch {
-            val json = sessionManager.exportSession(sessionId)
-            _exportedJson.value = json
-        }
+        viewModelScope.launch { _exportedJson.value = sessionManager.exportSession(sessionId) }
     }
 
-    fun clearExportedJson() {
-        _exportedJson.value = null
-    }
+    fun clearExportedJson() { _exportedJson.value = null }
+    fun clearLastError() { _lastError.value = null }
 
-    fun clearLastError() {
-        _lastError.value = null
-    }
+    // ─── Prompt & Persona ───────────────────────────────────────────────────────
 
-    fun prefillPrompt(prompt: String) {
-        _pendingPrompt.value = prompt
-    }
-
-    fun clearPendingPrompt() {
-        _pendingPrompt.value = null
-    }
+    fun prefillPrompt(prompt: String) { _pendingPrompt.value = prompt }
+    fun clearPendingPrompt() { _pendingPrompt.value = null }
 
     fun setActivePersona(personaId: String, name: String, systemPrompt: String) {
         viewModelScope.launch {
@@ -304,12 +190,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun cancelGeneration() {
-        viewModelScope.launch {
-            streamingJob?.cancel()
-            acpClient?.cancel()
-            _isGenerating.value = false
-            _streamingContent.value = ""
-        }
+        streamingJob?.cancel()
+        try { engineManager.getEngine().cancel() } catch (_: Exception) {}
+        _isGenerating.value = false
+        _streamingContent.value = ""
     }
 
     fun clearMessages() {
@@ -323,17 +207,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addSystemMessage(text: String) {
-        val msg = ChatMessage(
-            id = UUID.randomUUID().toString(),
-            role = MessageRole.SYSTEM,
-            content = text
+        _messages.value = _messages.value + ChatMessage(
+            id = UUID.randomUUID().toString(), role = MessageRole.SYSTEM, content = text
         )
-        _messages.value = _messages.value + msg
     }
 
-    fun getModelsForProvider(provider: String): List<String> {
-        return PROVIDER_MODELS[provider] ?: emptyList()
-    }
+    fun getModelsForProvider(provider: String): List<String> = PROVIDER_MODELS[provider] ?: emptyList()
 
     fun setActiveProviderAndModel(provider: String, model: String) {
         viewModelScope.launch {
@@ -347,222 +226,116 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Edit a previously sent user message and re-send it.
-     * Removes the edited message and all messages after it (including assistant responses),
-     * then sends the new content as a fresh message to regenerate.
-     */
     fun editAndResend(messageId: String, newContent: String) {
-        val currentMessages = _messages.value
-        val messageIndex = currentMessages.indexOfFirst { it.id == messageId }
-        if (messageIndex == -1) return
-
-        // Keep only messages before the edited one (remove it and everything after)
-        _messages.value = currentMessages.subList(0, messageIndex)
-
-        // Clear tool calls and streaming state
+        val idx = _messages.value.indexOfFirst { it.id == messageId }
+        if (idx == -1) return
+        _messages.value = _messages.value.subList(0, idx)
         _toolCalls.value = emptyList()
         _streamingContent.value = ""
-
-        // Send the new content (this will add a fresh user message and trigger generation)
         sendMessage(newContent)
     }
 
+    // ─── Message Sending ────────────────────────────────────────────────────────
+
     fun sendMessage(text: String) {
-        Log.i(TAG, "sendMessage: entering, currentSessionId=${_currentSessionId.value}, text='${text.take(50)}...'")
+        if (_currentSessionId.value == null) createNewSession()
 
-        if (_currentSessionId.value == null) {
-            Log.i(TAG, "sendMessage: no session, creating new one")
-            createNewSession()
-        }
-
-        Log.i(TAG, "sendMessage: sessionId=${_currentSessionId.value}")
-
-        val userMsg = ChatMessage(
-            id = UUID.randomUUID().toString(),
-            role = MessageRole.USER,
-            content = text
+        _messages.value = _messages.value + ChatMessage(
+            id = UUID.randomUUID().toString(), role = MessageRole.USER, content = text
         )
-        _messages.value = _messages.value + userMsg
         sessionManager.generateAutoTitle(text)
-
-        // Cancel previous job
-        streamingJob?.cancel()
-        streamingJob = viewModelScope.launch {
-            // Wait for the old job's finally block to complete before we set isGenerating=true
-            // This prevents the race where old finally{isGenerating=false} runs after new isGenerating=true
-            kotlinx.coroutines.yield()
-            _isGenerating.value = true
-            _streamingContent.value = ""
-            _thinkingContent.value = ""
-            _lastError.value = null
-
-            // Track the assistant placeholder ID so we can check it after completion
-            var assistantPlaceholderId: String? = null
-
-            try {
-                kotlinx.coroutines.withTimeout(120_000L) {
-                    val isAcpMode = !GoosePortHolder.localOnlyMode && acpClient != null
-                    Log.i(TAG, "sendMessage: isAcpMode=$isAcpMode, localOnlyMode=${GoosePortHolder.localOnlyMode}, acpClient=${acpClient != null}")
-
-                    if (isAcpMode) {
-                        Log.i(TAG, "sendMessage: sending via ACP")
-                        acpClient!!.sendPrompt(text)
-                    } else {
-                        Log.i(TAG, "sendMessage: sending via local/cloud path")
-                        assistantPlaceholderId = addAssistantPlaceholder()
-                        Log.i(TAG, "sendMessage: added assistant placeholder id=$assistantPlaceholderId")
-
-                        val found = localModelClient.handleLocalMessage(
-                            _messages.value, activeSystemPrompt, createStreamingCallbacks(assistantPlaceholderId!!)
-                        )
-                        Log.i(TAG, "sendMessage: handleLocalMessage returned found=$found")
-
-                        if (!found) {
-                            removeMessage(assistantPlaceholderId!!)
-                            val errorMsg = "No model configured.\n\n" +
-                                "Go to Settings to add a cloud API key or download a local model."
-                            _lastError.value = errorMsg
-                            addSystemMessage(errorMsg)
-                        }
-                    }
-                }
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                Log.e(TAG, "Message timed out after 120s", e)
-                val errorMsg = "Request timed out. Check your network connection and try again."
-                _lastError.value = errorMsg
-                addSystemMessage(errorMsg)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                Log.d(TAG, "Message cancelled")
-                throw e // Don't swallow cancellation
-            } catch (e: Exception) {
-                Log.e(TAG, "Error sending message", e)
-                val errorMsg = "Error: ${e.message}"
-                _lastError.value = errorMsg
-                addSystemMessage(errorMsg)
-            } finally {
-                _isGenerating.value = false
-
-                // Check if the assistant placeholder message is still empty after everything completed.
-                // This catches the case where streaming callbacks never fired or the API threw after
-                // the placeholder was added but before any tokens arrived.
-                if (assistantPlaceholderId != null) {
-                    val msgs = _messages.value
-                    val assistantMsg = msgs.find { it.id == assistantPlaceholderId }
-                    if (assistantMsg != null && assistantMsg.content.isBlank()) {
-                        Log.w(TAG, "sendMessage: assistant placeholder still empty after completion, replacing with error")
-                        val fallbackError = "No response received — check your API key and network connection."
-                        _lastError.value = fallbackError
-                        _messages.value = msgs.map { msg ->
-                            if (msg.id == assistantPlaceholderId) msg.copy(content = fallbackError) else msg
-                        }
-                    }
-                }
-
-                Log.i(TAG, "sendMessage: finished, isGenerating=false, messageCount=${_messages.value.size}")
-            }
-        }
+        launchEngineRequest(text)
     }
 
     fun sendMessageWithAttachments(text: String, attachments: List<AttachmentInfo>) {
-        Log.i(TAG, "sendMessageWithAttachments: entering, attachments=${attachments.size}")
-
-        if (_currentSessionId.value == null) {
-            Log.i(TAG, "sendMessageWithAttachments: no session, creating new one")
-            createNewSession()
-        }
+        if (_currentSessionId.value == null) createNewSession()
 
         val contentBuilder = StringBuilder()
-        val textAttachments = attachments.filter { !it.isImage }
-        for (attachment in textAttachments) {
-            contentBuilder.append("--- File: ${attachment.name} (${attachment.mimeType}) ---\n")
-            contentBuilder.append(attachment.content)
-            contentBuilder.append("\n--- End of ${attachment.name} ---\n\n")
+        for (a in attachments.filter { !it.isImage }) {
+            contentBuilder.append("--- File: ${a.name} (${a.mimeType}) ---\n")
+            contentBuilder.append(a.content)
+            contentBuilder.append("\n--- End of ${a.name} ---\n\n")
         }
         if (text.isNotBlank()) contentBuilder.append(text)
 
         val imageAttachments = attachments.filter { it.isImage }
         val displayContent = if (imageAttachments.isNotEmpty()) {
-            val imageNames = imageAttachments.joinToString(", ") { it.name }
-            contentBuilder.toString() + "\n[Attached images: $imageNames]"
-        } else {
-            contentBuilder.toString()
-        }
+            contentBuilder.toString() + "\n[Attached images: ${imageAttachments.joinToString(", ") { it.name }}]"
+        } else contentBuilder.toString()
 
-        val userMsg = ChatMessage(
-            id = UUID.randomUUID().toString(),
-            role = MessageRole.USER,
-            content = displayContent
+        _messages.value = _messages.value + ChatMessage(
+            id = UUID.randomUUID().toString(), role = MessageRole.USER, content = displayContent
         )
-        _messages.value = _messages.value + userMsg
         sessionManager.generateAutoTitle(text.ifBlank { attachments.firstOrNull()?.name ?: "Attachment" })
+        launchEngineRequest(contentBuilder.toString())
+    }
 
+    /**
+     * Core engine request: adds assistant placeholder, streams AgentEvents, updates UI.
+     * Shared by sendMessage() and sendMessageWithAttachments().
+     */
+    private fun launchEngineRequest(messageText: String) {
         streamingJob?.cancel()
         streamingJob = viewModelScope.launch {
-            kotlinx.coroutines.yield()
+            yield() // let old job's finally block complete
             _isGenerating.value = true
             _streamingContent.value = ""
             _thinkingContent.value = ""
+            _toolCalls.value = emptyList()
             _lastError.value = null
 
-            var assistantPlaceholderId: String? = null
+            val assistantId = addAssistantPlaceholder()
+            val history = buildConversationHistory(_messages.value)
 
             try {
-                kotlinx.coroutines.withTimeout(120_000L) {
-                    val isAcpMode = !GoosePortHolder.localOnlyMode && acpClient != null
-                    Log.i(TAG, "sendMessageWithAttachments: isAcpMode=$isAcpMode")
-
-                    if (isAcpMode) {
-                        val base64Images = imageAttachments.map { it.content }
-                        acpClient!!.sendPrompt(contentBuilder.toString(), base64Images)
-                    } else {
-                        assistantPlaceholderId = addAssistantPlaceholder()
-                        Log.i(TAG, "sendMessageWithAttachments: added assistant placeholder id=$assistantPlaceholderId")
-
-                        val found = localModelClient.handleLocalMessageWithAttachments(
-                            _messages.value, imageAttachments, activeSystemPrompt,
-                            createStreamingCallbacks(assistantPlaceholderId!!)
-                        )
-                        Log.i(TAG, "sendMessageWithAttachments: handleLocalMessageWithAttachments returned found=$found")
-
-                        if (!found) {
-                            removeMessage(assistantPlaceholderId!!)
-                            val errorMsg = "No model configured.\n\nGo to Settings to configure a provider."
-                            _lastError.value = errorMsg
-                            addSystemMessage(errorMsg)
-                        }
-                    }
-                }
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                Log.e(TAG, "Message with attachments timed out", e)
-                val errorMsg = "Request timed out. Check your network connection and try again."
-                _lastError.value = errorMsg
-                addSystemMessage(errorMsg)
-            } catch (e: kotlinx.coroutines.CancellationException) {
+                engineManager.getEngine()
+                    .sendMessage(messageText, history, activeSystemPrompt)
+                    .collect { event -> handleAgentEvent(event, assistantId) }
+            } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Error sending message with attachments", e)
+                Log.e(TAG, "Error in engine request", e)
                 val errorMsg = "Error: ${e.message}"
                 _lastError.value = errorMsg
                 addSystemMessage(errorMsg)
             } finally {
                 _isGenerating.value = false
-
-                // Check if the assistant placeholder message is still empty
-                if (assistantPlaceholderId != null) {
-                    val msgs = _messages.value
-                    val assistantMsg = msgs.find { it.id == assistantPlaceholderId }
-                    if (assistantMsg != null && assistantMsg.content.isBlank()) {
-                        Log.w(TAG, "sendMessageWithAttachments: assistant placeholder still empty, replacing with error")
-                        val fallbackError = "No response received — check your API key and network connection."
-                        _lastError.value = fallbackError
-                        _messages.value = msgs.map { msg ->
-                            if (msg.id == assistantPlaceholderId) msg.copy(content = fallbackError) else msg
-                        }
-                    }
+                checkEmptyAssistant(assistantId)
+                viewModelScope.launch {
+                    sessionManager.saveCurrentSessionMessages()
+                    sessionManager.updateCurrentSessionMetadata()
                 }
+            }
+        }
+    }
 
-                Log.i(TAG, "sendMessageWithAttachments: finished, isGenerating=false")
+    /** Process a single AgentEvent and update UI state accordingly. */
+    private fun handleAgentEvent(event: AgentEvent, assistantId: String) {
+        when (event) {
+            is AgentEvent.Token -> {
+                _streamingContent.value = event.accumulated
+                updateAssistantMessage(assistantId, event.accumulated)
+            }
+            is AgentEvent.Thinking -> {
+                _thinkingContent.value = event.text
+            }
+            is AgentEvent.ToolStart -> {
+                addToolCall(event.id, event.name, event.input)
+                updateLastAssistantToolCalls()
+            }
+            is AgentEvent.ToolEnd -> {
+                updateToolCall(event.id, event.output, event.isError)
+                updateLastAssistantToolCalls()
+            }
+            is AgentEvent.Complete -> {
+                val finalContent = event.fullText.ifBlank { _streamingContent.value }
+                updateAssistantMessage(assistantId, finalContent, _thinkingContent.value)
+                _streamingContent.value = ""
+                _thinkingContent.value = ""
+            }
+            is AgentEvent.Error -> {
+                _lastError.value = event.message
+                addSystemMessage(event.message)
             }
         }
     }
@@ -576,55 +349,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             addSystemMessage("Cannot compact while generating a response.")
             return
         }
-
         viewModelScope.launch {
             _isGenerating.value = true
             try {
-                val activeProvider = settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER).first()
-                val activeModel = settingsStore.getString(SettingsKeys.ACTIVE_MODEL).first()
-                val apiKey = cloudApiClient.getApiKeyForProvider(activeProvider)
-
-                Log.i(TAG, "compactConversation: provider=$activeProvider, model=$activeModel")
-
-                if (apiKey.isBlank() && activeProvider != "custom" && activeProvider != "local") {
-                    addSystemMessage("Cannot compact: no API key configured for provider '$activeProvider'.")
-                    _isGenerating.value = false
-                    return@launch
-                }
-
                 val conversationText = _messages.value
                     .filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
                     .joinToString("\n\n") { msg ->
-                        val roleLabel = if (msg.role == MessageRole.USER) "User" else "Assistant"
-                        "$roleLabel: ${msg.content}"
+                        val label = if (msg.role == MessageRole.USER) "User" else "Assistant"
+                        "$label: ${msg.content}"
+                    }
+                val prompt = "Please provide a concise but comprehensive summary of the following conversation. " +
+                    "Capture all key points, decisions, code snippets, and context needed to continue. " +
+                    "Format it clearly.\n\n---\n\n$conversationText"
+
+                val history = listOf(ConversationMessage(role = "user", content = prompt))
+                val sb = StringBuilder()
+
+                engineManager.getEngine().sendMessage(prompt, history, activeSystemPrompt)
+                    .collect { event ->
+                        when (event) {
+                            is AgentEvent.Token -> sb.clear().append(event.accumulated)
+                            is AgentEvent.Complete -> sb.clear().append(event.fullText)
+                            else -> {}
+                        }
                     }
 
-                val summaryPrompt = "Please provide a concise but comprehensive summary of the following conversation. " +
-                    "Capture all key points, decisions, code snippets, and context that would be needed to continue " +
-                    "the conversation. Format it clearly.\n\n---\n\n$conversationText"
-
-                val summaryMessages = listOf("user" to summaryPrompt)
-                val summary = cloudApiClient.callCloudApiForSummary(
-                    activeProvider, apiKey, activeModel, summaryMessages, activeSystemPrompt
-                )
-
+                val summary = sb.toString()
                 if (summary.isNotBlank()) {
-                    val compactNote = ChatMessage(
-                        id = UUID.randomUUID().toString(),
-                        role = MessageRole.SYSTEM,
-                        content = "⚡ Conversation compacted. Previous messages have been summarized."
+                    _messages.value = listOf(
+                        ChatMessage(UUID.randomUUID().toString(), MessageRole.SYSTEM,
+                            "⚡ Conversation compacted. Previous messages have been summarized."),
+                        ChatMessage(UUID.randomUUID().toString(), MessageRole.ASSISTANT, summary)
                     )
-                    val summaryMsg = ChatMessage(
-                        id = UUID.randomUUID().toString(),
-                        role = MessageRole.ASSISTANT,
-                        content = summary
-                    )
-                    _messages.value = listOf(compactNote, summaryMsg)
                     _toolCalls.value = emptyList()
                     sessionManager.saveCurrentSessionMessages()
                     sessionManager.updateCurrentSessionMetadata()
                 } else {
-                    addSystemMessage("Compact failed: received empty summary from API.")
+                    addSystemMessage("Compact failed: received empty summary.")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Compact conversation failed", e)
@@ -638,134 +399,76 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // ─── Private Helpers ────────────────────────────────────────────────────────
 
     private fun saveSessions() {
-        viewModelScope.launch(Dispatchers.IO) {
-            sessionRepository.saveSessions(_sessions.value)
-        }
+        viewModelScope.launch(Dispatchers.IO) { sessionRepository.saveSessions(_sessions.value) }
     }
 
     private fun addAssistantPlaceholder(): String {
-        val assistantId = UUID.randomUUID().toString()
-        val placeholder = ChatMessage(
-            id = assistantId,
-            role = MessageRole.ASSISTANT,
-            content = ""
-        )
-        _messages.value = _messages.value + placeholder
-        return assistantId
+        val id = UUID.randomUUID().toString()
+        _messages.value = _messages.value + ChatMessage(id = id, role = MessageRole.ASSISTANT, content = "")
+        return id
     }
 
-    private fun removeMessage(messageId: String) {
-        _messages.value = _messages.value.filter { it.id != messageId }
-    }
-
-    private fun createStreamingCallbacks(assistantId: String): CloudApiClient.StreamingCallbacks {
-        return object : CloudApiClient.StreamingCallbacks {
-            override fun onToken(token: String) {
-                _streamingContent.value = token
-                val currentMessages = _messages.value
-                val lastIndex = currentMessages.lastIndex
-                if (lastIndex >= 0 && currentMessages[lastIndex].id == assistantId) {
-                    val updatedMsg = currentMessages[lastIndex].copy(content = token)
-                    _messages.value = currentMessages.toMutableList().apply {
-                        this[lastIndex] = updatedMsg
-                    }
-                } else {
-                    // Fallback: scan the list (should rarely happen)
-                    _messages.value = currentMessages.map { msg ->
-                        if (msg.id == assistantId) msg.copy(content = token) else msg
-                    }
-                }
-            }
-
-            override fun onComplete(fullContent: String) {
-                Log.i(TAG, "StreamingCallbacks.onComplete: contentLength=${fullContent.length}")
-                val finalContent = fullContent.ifBlank { "No response received" }
-                val thinkingText = _thinkingContent.value
-                _messages.value = _messages.value.map { msg ->
-                    if (msg.id == assistantId) msg.copy(
-                        content = finalContent,
-                        thinking = thinkingText
-                    ) else msg
-                }
-                _streamingContent.value = ""
-                _thinkingContent.value = ""
-                _isGenerating.value = false
-                viewModelScope.launch {
-                    sessionManager.saveCurrentSessionMessages()
-                    sessionManager.updateCurrentSessionMetadata()
-                }
-            }
-
-            override fun onError(error: String) {
-                Log.e(TAG, "StreamingCallbacks.onError: $error")
-                val current = _streamingContent.value
-                if (current.isBlank()) {
-                    _messages.value = _messages.value.map { msg ->
-                        if (msg.id == assistantId) msg.copy(content = "Error: $error") else msg
-                    }
-                }
-                _streamingContent.value = ""
-                _thinkingContent.value = ""
-                _isGenerating.value = false
-                _lastError.value = error
-                if (current.isBlank()) {
-                    addSystemMessage(error)
-                }
-                viewModelScope.launch {
-                    sessionManager.saveCurrentSessionMessages()
-                    sessionManager.updateCurrentSessionMetadata()
-                }
-            }
-
-            override fun onToolCallStart(name: String) {
-                _toolCalls.value = AcpNotificationHandler.addToolCallStart(_toolCalls.value, name, "")
-                updateLastAssistantToolCalls()
-            }
-
-            override fun onToolCallEnd(name: String, output: String, isError: Boolean) {
-                _toolCalls.value = AcpNotificationHandler.updateToolCallEnd(_toolCalls.value, name, output, isError)
-                updateLastAssistantToolCalls()
-            }
-
-            override fun onThinking(text: String) {
-                _thinkingContent.value = text
-            }
-        }
-    }
-
-    private fun handleAcpStreamingContent(content: String, isComplete: Boolean) {
-        val currentMessages = _messages.value
-        val lastMsg = currentMessages.lastOrNull()
-
-        if (lastMsg != null && lastMsg.role == MessageRole.ASSISTANT && _isGenerating.value) {
-            val updated = lastMsg.copy(content = lastMsg.content + content)
-            _messages.value = currentMessages.dropLast(1) + updated
-            _streamingContent.value = updated.content
+    private fun updateAssistantMessage(assistantId: String, content: String, thinking: String = "") {
+        val msgs = _messages.value
+        val last = msgs.lastIndex
+        if (last >= 0 && msgs[last].id == assistantId) {
+            val updated = if (thinking.isNotEmpty()) msgs[last].copy(content = content, thinking = thinking)
+                          else msgs[last].copy(content = content)
+            _messages.value = msgs.toMutableList().apply { this[last] = updated }
         } else {
-            val msg = ChatMessage(
-                id = UUID.randomUUID().toString(),
-                role = MessageRole.ASSISTANT,
-                content = content
-            )
-            _messages.value = currentMessages + msg
-            _streamingContent.value = content
-        }
-
-        if (isComplete) {
-            _isGenerating.value = false
-            _streamingContent.value = ""
-            viewModelScope.launch {
-                sessionManager.saveCurrentSessionMessages()
-                sessionManager.updateCurrentSessionMetadata()
+            _messages.value = msgs.map { m ->
+                if (m.id == assistantId) {
+                    if (thinking.isNotEmpty()) m.copy(content = content, thinking = thinking) else m.copy(content = content)
+                } else m
             }
+        }
+    }
+
+    private fun addToolCall(id: String, name: String, input: String) {
+        _toolCalls.value = _toolCalls.value + ToolCall(id = id, name = name, status = ToolCallStatus.RUNNING, input = input)
+    }
+
+    private fun updateToolCall(id: String, output: String, isError: Boolean) {
+        val status = if (isError) ToolCallStatus.ERROR else ToolCallStatus.COMPLETE
+        _toolCalls.value = _toolCalls.value.map { tc ->
+            if (tc.id == id || (id.isBlank() && tc.status == ToolCallStatus.RUNNING))
+                tc.copy(status = status, output = output)
+            else tc
         }
     }
 
     private fun updateLastAssistantToolCalls() {
-        val currentMessages = _messages.value
-        val lastAssistant = currentMessages.lastOrNull { it.role == MessageRole.ASSISTANT } ?: return
-        val updated = lastAssistant.copy(toolCalls = _toolCalls.value.toList())
-        _messages.value = currentMessages.map { if (it.id == lastAssistant.id) updated else it }
+        val msgs = _messages.value
+        val last = msgs.lastOrNull { it.role == MessageRole.ASSISTANT } ?: return
+        val updated = last.copy(toolCalls = _toolCalls.value.toList())
+        _messages.value = msgs.map { if (it.id == last.id) updated else it }
+    }
+
+    /** If the assistant placeholder is still empty after streaming, fill it with an error. */
+    private fun checkEmptyAssistant(assistantId: String) {
+        val msg = _messages.value.find { it.id == assistantId } ?: return
+        if (msg.content.isNotBlank()) return
+        val fallback = _lastError.value ?: "No response received — check your API key and network connection."
+        _lastError.value = fallback
+        _messages.value = _messages.value.map { m ->
+            if (m.id == assistantId) m.copy(content = fallback) else m
+        }
+    }
+
+    /** Convert UI ChatMessages to engine ConversationMessages (excluding the latest user message). */
+    private fun buildConversationHistory(messages: List<ChatMessage>): List<ConversationMessage> {
+        val history = if (messages.isNotEmpty() && messages.last().role == MessageRole.USER)
+            messages.dropLast(1) else messages
+
+        return history.mapNotNull { msg ->
+            if (msg.content.isBlank()) return@mapNotNull null
+            val role = when (msg.role) {
+                MessageRole.USER -> "user"
+                MessageRole.ASSISTANT -> "assistant"
+                MessageRole.SYSTEM -> "system"
+            }
+            ConversationMessage(role = role, content = msg.content)
+        }
     }
 
     override fun onCleared() {
@@ -773,7 +476,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO + NonCancellable) {
             sessionManager.saveCurrentSessionMessages()
             sessionManager.updateCurrentSessionMetadata()
+            engineManager.shutdown()
         }
-        acpClient?.disconnect()
     }
 }
