@@ -2,9 +2,11 @@ package io.github.gooseandroid.engine
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Manages engine lifecycle and automatic failover.
@@ -29,6 +31,9 @@ class GooseEngineManager(private val context: Context) {
     private val _engineInfo = MutableStateFlow("Initializing...")
     val engineInfo: StateFlow<String> = _engineInfo.asStateFlow()
 
+    /** Signals when initialization is complete. getEngine() waits on this. */
+    private val initComplete = CompletableDeferred<Unit>()
+
     /**
      * Initialize engines with automatic failover.
      * Always results in a working engine (Kotlin native is the guaranteed fallback).
@@ -50,6 +55,7 @@ class GooseEngineManager(private val context: Context) {
                 _activeEngine.value = rust
                 _engineInfo.value = "Goose (native binary)"
                 Log.i(TAG, "Rust binary engine connected successfully")
+                initComplete.complete(Unit)
                 return
             } else {
                 Log.w(TAG, "Rust binary engine failed to initialize")
@@ -71,6 +77,7 @@ class GooseEngineManager(private val context: Context) {
                 _activeEngine.value = kotlin
                 _engineInfo.value = "Goose (native Kotlin)"
                 Log.i(TAG, "Kotlin native engine ready")
+                initComplete.complete(Unit)
                 return
             }
         } catch (e: Exception) {
@@ -80,14 +87,22 @@ class GooseEngineManager(private val context: Context) {
         // This should never happen — Kotlin engine has no external dependencies
         _engineInfo.value = "Engine initialization failed"
         Log.e(TAG, "FATAL: No engine could be initialized")
+        initComplete.complete(Unit)
     }
 
     /**
-     * Get the current active engine. Never null after initialize() completes.
+     * Get the current active engine.
+     * Suspends until initialization is complete (max 30 seconds).
+     * Returns null if no engine could be initialized.
      */
-    fun getEngine(): GooseEngine {
+    suspend fun getEngine(): GooseEngine? {
+        // If already initialized, return immediately
+        _activeEngine.value?.let { return it }
+
+        // Wait for initialization to complete (with timeout)
+        withTimeoutOrNull(30_000L) { initComplete.await() }
+
         return _activeEngine.value
-            ?: throw IllegalStateException("Engine not initialized. Call initialize() first.")
     }
 
     /**

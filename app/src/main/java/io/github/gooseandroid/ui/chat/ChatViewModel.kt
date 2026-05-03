@@ -191,7 +191,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelGeneration() {
         streamingJob?.cancel()
-        try { engineManager.getEngine().cancel() } catch (_: Exception) {}
+        viewModelScope.launch {
+            try { engineManager.getEngine()?.cancel() } catch (_: Exception) {}
+        }
         _isGenerating.value = false
         _streamingContent.value = ""
     }
@@ -288,8 +290,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val history = buildConversationHistory(_messages.value)
 
             try {
-                engineManager.getEngine()
-                    .sendMessage(messageText, history, activeSystemPrompt)
+                val engine = engineManager.getEngine()
+                if (engine == null) {
+                    addSystemMessage("No AI engine available. Configure an API key in Settings.")
+                    return@launch
+                }
+                engine.sendMessage(messageText, history, activeSystemPrompt)
                     .collect { event -> handleAgentEvent(event, assistantId) }
             } catch (e: CancellationException) {
                 throw e
@@ -365,7 +371,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val history = listOf(ConversationMessage(role = "user", content = prompt))
                 val sb = StringBuilder()
 
-                engineManager.getEngine().sendMessage(prompt, history, activeSystemPrompt)
+                val engine = engineManager.getEngine() ?: run {
+                    addSystemMessage("Engine not available for compaction.")
+                    return@launch
+                }
+                engine.sendMessage(prompt, history, activeSystemPrompt)
                     .collect { event ->
                         when (event) {
                             is AgentEvent.Token -> sb.clear().append(event.accumulated)
