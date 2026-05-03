@@ -65,7 +65,10 @@ private fun resolveSafe(workingDir: File, path: String): File {
 // 1. ShellTool
 // ---------------------------------------------------------------------------
 
-class ShellTool(private val workingDir: File) : Tool {
+class ShellTool(
+    private val workingDir: File,
+    private val extraEnv: Map<String, String> = emptyMap()
+) : Tool {
 
     override val name = "shell"
     override val description =
@@ -89,10 +92,14 @@ class ShellTool(private val workingDir: File) : Tool {
         }
 
         try {
-            val process = ProcessBuilder("sh", "-c", command)
+            val pb = ProcessBuilder("sh", "-c", command)
                 .directory(workingDir)
                 .redirectErrorStream(true)
-                .start()
+            // Add runtime tools (BusyBox, Git, Node, etc.) to PATH
+            if (extraEnv.isNotEmpty()) {
+                pb.environment().putAll(extraEnv)
+            }
+            val process = pb.start()
 
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             val lines = mutableListOf<String>()

@@ -36,6 +36,7 @@ private val MODULES = listOf(
     PanelModule("Brain", Icons.Default.Psychology, "brain"),
     PanelModule("Extensions", Icons.Default.Extension, "extensions"),
     PanelModule("Models", Icons.Default.Memory, "models"),
+    PanelModule("Runtimes", Icons.Default.Build, "runtimes"),
     PanelModule("Logs", Icons.Default.Terminal, "logs"),
     PanelModule("Doctor", Icons.Default.HealthAndSafety, "doctor"),
     PanelModule("Settings", Icons.Default.Settings, "settings"),

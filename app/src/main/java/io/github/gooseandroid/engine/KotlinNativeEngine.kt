@@ -40,7 +40,9 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
 
     private val settingsStore = SettingsStore(context)
     private val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
-    private val toolRouter = ToolRouter(workspaceDir)
+    private val runtimeManager = io.github.gooseandroid.runtime.RuntimeManager(context)
+    private val shellEnv = buildShellEnvironment()
+    private val toolRouter = ToolRouter(workspaceDir, shellEnv)
     private val mcpManager = McpExtensionManager()
 
     private var currentProvider: LlmProvider? = null
@@ -150,6 +152,34 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             Log.e(TAG, "Failed to refresh provider", e)
             return@withContext false
         }
+    }
+
+    private fun buildShellEnvironment(): Map<String, String> {
+        val env = mutableMapOf<String, String>()
+        val runtimeBinDir = File(workspaceDir, "runtimes/bin")
+        runtimeBinDir.mkdirs()
+
+        // Build PATH: runtime tools → system binaries
+        val pathParts = mutableListOf<String>()
+        pathParts.add(runtimeBinDir.absolutePath)
+        // Add any installed runtime pack bin dirs
+        val runtimesDir = File(workspaceDir, "runtimes")
+        if (runtimesDir.exists()) {
+            runtimesDir.listFiles()?.filter { it.isDirectory && it.name != "bin" }?.forEach { packDir ->
+                val binDir = File(packDir, "bin")
+                if (binDir.exists()) pathParts.add(binDir.absolutePath)
+            }
+        }
+        pathParts.add("/system/bin")
+        pathParts.add("/system/xbin")
+
+        env["PATH"] = pathParts.joinToString(":")
+        env["HOME"] = workspaceDir.absolutePath
+        env["TMPDIR"] = context.cacheDir.absolutePath
+        env["LANG"] = "en_US.UTF-8"
+        env["TERM"] = "xterm-256color"
+
+        return env
     }
 
     private suspend fun getApiKeyForProvider(providerId: String): String {

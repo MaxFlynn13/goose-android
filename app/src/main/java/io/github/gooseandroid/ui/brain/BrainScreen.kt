@@ -196,6 +196,16 @@ fun BrainScreen(
                             },
                             onDelete = {
                                 scope.launch { brainDb.deleteNode(node.id) }
+                            },
+                            onExport = {
+                                scope.launch {
+                                    val jsonString = brainDb.exportNode(node.id)
+                                    if (jsonString != null) {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Brain Node", jsonString))
+                                        Toast.makeText(context, "Node exported to clipboard", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             }
                         )
                     }
@@ -245,7 +255,8 @@ private fun NodeCard(
     node: BrainNode,
     onClick: () -> Unit,
     onPin: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onExport: () -> Unit = {}
 ) {
     Card(
         onClick = onClick,
@@ -289,6 +300,14 @@ private fun NodeCard(
                 }
 
                 Row {
+                    IconButton(onClick = onExport, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Default.Share,
+                            contentDescription = "Export node",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     IconButton(onClick = onPin, modifier = Modifier.size(32.dp)) {
                         Icon(
                             if (node.pinned) Icons.Default.PushPin else Icons.Default.PushPin,
@@ -343,6 +362,7 @@ private fun CreateNodeDialog(
     var content by remember { mutableStateOf("") }
     var tagsText by remember { mutableStateOf("") }
     var selectedType by remember { mutableStateOf(NodeType.NOTE) }
+    var showTypeDropdown by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -371,6 +391,40 @@ private fun CreateNodeDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                // Node type selector
+                Box {
+                    OutlinedTextField(
+                        value = selectedType.value.replaceFirstChar { it.uppercase() },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Type") },
+                        trailingIcon = {
+                            IconButton(onClick = { showTypeDropdown = !showTypeDropdown }) {
+                                Icon(
+                                    if (showTypeDropdown) Icons.Default.ArrowDropUp
+                                    else Icons.Default.ArrowDropDown,
+                                    contentDescription = "Select type"
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    DropdownMenu(
+                        expanded = showTypeDropdown,
+                        onDismissRequest = { showTypeDropdown = false }
+                    ) {
+                        NodeType.entries.forEach { type ->
+                            DropdownMenuItem(
+                                text = { Text(type.value.replaceFirstChar { it.uppercase() }) },
+                                onClick = {
+                                    selectedType = type
+                                    showTypeDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {

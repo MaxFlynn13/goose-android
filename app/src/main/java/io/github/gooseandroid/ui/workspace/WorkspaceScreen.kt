@@ -40,8 +40,10 @@ fun WorkspaceScreen(onBack: () -> Unit) {
     var stats by remember { mutableStateOf<WorkspaceStats?>(null) }
     var showImportMenu by remember { mutableStateOf(false) }
     var showNameDialog by remember { mutableStateOf(false) }
+    var showCreateFolderDialog by remember { mutableStateOf(false) }
     var importMode by remember { mutableStateOf<ImportMode?>(null) }
     var projectNameInput by remember { mutableStateOf("") }
+    var createFolderName by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<ProjectFolder?>(null) }
 
     fun refresh() {
@@ -105,6 +107,15 @@ fun WorkspaceScreen(onBack: () -> Unit) {
                     Icon(Icons.Default.Add, contentDescription = "Import")
                 }
                 DropdownMenu(expanded = showImportMenu, onDismissRequest = { showImportMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Create Folder") },
+                        leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) },
+                        onClick = {
+                            showImportMenu = false
+                            createFolderName = ""
+                            showCreateFolderDialog = true
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text("Import ZIP") },
                         leadingIcon = { Icon(Icons.Default.FolderZip, null) },
@@ -240,6 +251,48 @@ fun WorkspaceScreen(onBack: () -> Unit) {
             },
             dismissButton = {
                 TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    // Create new folder dialog
+    if (showCreateFolderDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateFolderDialog = false },
+            title = { Text("Create New Folder") },
+            text = {
+                OutlinedTextField(
+                    value = createFolderName,
+                    onValueChange = { createFolderName = it },
+                    label = { Text("Folder Name") },
+                    singleLine = true,
+                    supportingText = { Text("Letters, numbers, hyphens, underscores") }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val name = createFolderName.trim()
+                        showCreateFolderDialog = false
+                        scope.launch {
+                            val result = workspaceManager.createProject(name)
+                            result.fold(
+                                onSuccess = {
+                                    refresh()
+                                    snackbarHostState.showSnackbar("Created \"$name\"")
+                                },
+                                onFailure = {
+                                    snackbarHostState.showSnackbar("Failed: ${it.message}")
+                                }
+                            )
+                        }
+                    },
+                    enabled = createFolderName.isNotBlank() &&
+                            workspaceManager.isValidProjectName(createFolderName.trim())
+                ) { Text("Create") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateFolderDialog = false }) { Text("Cancel") }
             }
         )
     }

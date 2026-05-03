@@ -23,6 +23,7 @@ import io.github.gooseandroid.ui.chat.ChatScreen
 import io.github.gooseandroid.ui.chat.ChatViewModel
 import io.github.gooseandroid.ui.doctor.DoctorScreen
 import io.github.gooseandroid.ui.doctor.LogViewerScreen
+import io.github.gooseandroid.ui.runtime.RuntimePacksScreen
 import io.github.gooseandroid.ui.workspace.WorkspaceScreen
 import io.github.gooseandroid.ui.extensions.ExtensionsScreen
 import io.github.gooseandroid.ui.history.HistoryScreen
@@ -134,6 +135,7 @@ fun GooseNavigation(sharedText: String? = null) {
             }
             composable("doctor") { DoctorScreen(onBack = { navController.popBackStack() }) }
             composable("logs") { LogViewerScreen(onBack = { navController.popBackStack() }) }
+            composable("runtimes") { RuntimePacksScreen(onBack = { navController.popBackStack() }) }
             composable("workspace") { WorkspaceScreen(onBack = { navController.popBackStack() }) }
         }
 

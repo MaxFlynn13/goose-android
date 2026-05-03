@@ -12,13 +12,13 @@ import java.io.File
  * The primary constructor auto-registers the built-in developer tools
  * (shell, write, edit, tree) scoped to the given workspace directory.
  */
-class ToolRouter(workspaceDir: File) {
+class ToolRouter(workspaceDir: File, shellEnv: Map<String, String> = emptyMap()) {
 
     private val tools = mutableMapOf<String, Tool>()
 
     init {
         // Register the built-in developer tools
-        register(ShellTool(workspaceDir))
+        register(ShellTool(workspaceDir, shellEnv))
         register(FileWriteTool(workspaceDir))
         register(FileEditTool(workspaceDir))
         register(TreeTool(workspaceDir))

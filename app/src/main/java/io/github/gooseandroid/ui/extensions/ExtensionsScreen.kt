@@ -102,7 +102,9 @@ data class McpExtensionConfig(
     val name: String,
     val type: String,
     val url: String = "",
-    val command: String = ""
+    val command: String = "",
+    val envVars: Map<String, String> = emptyMap(),
+    val args: List<String> = emptyList()
 )
 
 @Serializable
@@ -232,7 +234,8 @@ fun ExtensionsScreen(onBack: () -> Unit) {
             items(MCP_EXTENSIONS) { ext ->
                 McpExtensionCard(
                     ext = ext,
-                    onSetupClick = { setupTarget = ext }
+                    onSetupClick = { setupTarget = ext },
+                    onRemove = null
                 )
             }
 
@@ -259,7 +262,17 @@ fun ExtensionsScreen(onBack: () -> Unit) {
                     )
                     McpExtensionCard(
                         ext = ext,
-                        onSetupClick = { setupTarget = ext }
+                        onSetupClick = { setupTarget = ext },
+                        onRemove = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    val current = loadMcpConfigs(context)
+                                    val updated = current.extensions.filter { it.id != cfg.id }
+                                    saveMcpConfigs(context, McpExtensionsFile(updated))
+                                    userExtensions = updated
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -273,7 +286,7 @@ fun ExtensionsScreen(onBack: () -> Unit) {
             existingConfig = userExtensions.find { it.id == ext.id }
                 ?: loadMcpConfigs(context).extensions.find { it.id == ext.id },
             onDismiss = { setupTarget = null },
-            onSave = { url, command ->
+            onSave = { url, command, envVars, args ->
                 scope.launch {
                     withContext(Dispatchers.IO) {
                         val current = loadMcpConfigs(context)
@@ -282,7 +295,9 @@ fun ExtensionsScreen(onBack: () -> Unit) {
                             name = ext.name,
                             type = ext.type,
                             url = url,
-                            command = command
+                            command = command,
+                            envVars = envVars,
+                            args = args
                         )
                         val updated = current.extensions.filter { it.id != ext.id } + newConfig
                         saveMcpConfigs(context, McpExtensionsFile(updated))
@@ -297,7 +312,7 @@ fun ExtensionsScreen(onBack: () -> Unit) {
     if (showAddDialog) {
         AddExtensionDialog(
             onDismiss = { showAddDialog = false },
-            onAdd = { name, type, url, command ->
+            onAdd = { name, type, url, command, envVars, args ->
                 scope.launch {
                     withContext(Dispatchers.IO) {
                         val current = loadMcpConfigs(context)
@@ -307,7 +322,9 @@ fun ExtensionsScreen(onBack: () -> Unit) {
                             name = name,
                             type = type,
                             url = url,
-                            command = command
+                            command = command,
+                            envVars = envVars,
+                            args = args
                         )
                         val updated = current.extensions + newConfig
                         saveMcpConfigs(context, McpExtensionsFile(updated))
@@ -359,7 +376,8 @@ private fun ExtensionCard(
 @Composable
 private fun McpExtensionCard(
     ext: ExtensionInfo,
-    onSetupClick: () -> Unit
+    onSetupClick: () -> Unit,
+    onRemove: (() -> Unit)? = null
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -392,8 +410,19 @@ private fun McpExtensionCard(
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
-            FilledTonalButton(onClick = onSetupClick) {
-                Text("Setup")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FilledTonalButton(onClick = onSetupClick) {
+                    Text("Setup")
+                }
+                if (onRemove != null) {
+                    IconButton(onClick = onRemove) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Remove extension",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             }
         }
     }
@@ -402,17 +431,25 @@ private fun McpExtensionCard(
 /**
  * Dialog shown when the user taps "Setup" on an MCP extension card.
  * Lets the user enter the server URL (for http) or command (for stdio),
- * then persists to mcp_extensions.json.
+ * environment variables, and arguments, then persists to mcp_extensions.json.
  */
 @Composable
 private fun McpSetupDialog(
     ext: ExtensionInfo,
     existingConfig: McpExtensionConfig?,
     onDismiss: () -> Unit,
-    onSave: (url: String, command: String) -> Unit
+    onSave: (url: String, command: String, envVars: Map<String, String>, args: List<String>) -> Unit
 ) {
     var url by remember { mutableStateOf(existingConfig?.url ?: "") }
     var command by remember { mutableStateOf(existingConfig?.command ?: "") }
+    var envVarsText by remember {
+        mutableStateOf(
+            existingConfig?.envVars?.entries?.joinToString("\n") { "${it.key}=${it.value}" } ?: ""
+        )
+    }
+    var argsText by remember {
+        mutableStateOf(existingConfig?.args?.joinToString("\n") ?: "")
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -442,12 +479,41 @@ private fun McpSetupDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedTextField(
+                        value = argsText,
+                        onValueChange = { argsText = it },
+                        label = { Text("Arguments (one per line)") },
+                        placeholder = { Text("--port\n8080") },
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
+                OutlinedTextField(
+                    value = envVarsText,
+                    onValueChange = { envVarsText = it },
+                    label = { Text("Environment Variables (KEY=VALUE, one per line)") },
+                    placeholder = { Text("API_KEY=sk-xxx\nDEBUG=true") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSave(url, command) },
+                onClick = {
+                    val envVars = envVarsText.lines()
+                        .filter { it.contains("=") }
+                        .associate { line ->
+                            val idx = line.indexOf("=")
+                            line.substring(0, idx).trim() to line.substring(idx + 1).trim()
+                        }
+                    val args = argsText.lines()
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                    onSave(url, command, envVars, args)
+                },
                 enabled = if (ext.type == "http") url.isNotBlank() else command.isNotBlank()
             ) {
                 Text("Save")
@@ -462,12 +528,14 @@ private fun McpSetupDialog(
 @Composable
 private fun AddExtensionDialog(
     onDismiss: () -> Unit,
-    onAdd: (name: String, type: String, url: String, command: String) -> Unit
+    onAdd: (name: String, type: String, url: String, command: String, envVars: Map<String, String>, args: List<String>) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var type by remember { mutableStateOf("http") }
     var url by remember { mutableStateOf("") }
     var command by remember { mutableStateOf("") }
+    var envVarsText by remember { mutableStateOf("") }
+    var argsText by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -513,12 +581,42 @@ private fun AddExtensionDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedTextField(
+                        value = argsText,
+                        onValueChange = { argsText = it },
+                        label = { Text("Arguments (one per line)") },
+                        placeholder = { Text("--port\n8080") },
+                        minLines = 2,
+                        maxLines = 4,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
+
+                OutlinedTextField(
+                    value = envVarsText,
+                    onValueChange = { envVarsText = it },
+                    label = { Text("Environment Variables (KEY=VALUE, one per line)") },
+                    placeholder = { Text("API_KEY=sk-xxx\nDEBUG=true") },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onAdd(name, type, url, command) },
+                onClick = {
+                    val envVars = envVarsText.lines()
+                        .filter { it.contains("=") }
+                        .associate { line ->
+                            val idx = line.indexOf("=")
+                            line.substring(0, idx).trim() to line.substring(idx + 1).trim()
+                        }
+                    val args = argsText.lines()
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                    onAdd(name, type, url, command, envVars, args)
+                },
                 enabled = name.isNotBlank() && (url.isNotBlank() || command.isNotBlank())
             ) {
                 Text("Add")
