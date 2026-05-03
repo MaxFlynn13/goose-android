@@ -13,7 +13,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+// No external tar library needed — using built-in tar parsing
 
 data class RuntimePack(
     val id: String,
@@ -332,34 +332,88 @@ class RuntimePackManager(private val context: Context) {
         }
     }
 
+    /**
+     * Extract a .tar.gz archive using pure Java (no Apache Commons dependency).
+     * Tar format: 512-byte header blocks followed by file data padded to 512 bytes.
+     */
     private fun extractTarGz(archiveFile: File, destDir: File) {
         val gzipStream = GZIPInputStream(FileInputStream(archiveFile))
-        val tarStream = TarArchiveInputStream(gzipStream)
+        val buffered = java.io.BufferedInputStream(gzipStream)
 
-        tarStream.use { tar ->
-            var entry = tar.nextEntry
-            while (entry != null) {
-                val entryFile = File(destDir, entry.name)
-
-                val canonicalDest = destDir.canonicalPath
-                val canonicalEntry = entryFile.canonicalPath
-                if (!canonicalEntry.startsWith(canonicalDest)) {
-                    throw SecurityException("Archive entry outside target dir: ${entry.name}")
-                }
-
-                if (entry.isDirectory) {
-                    entryFile.mkdirs()
-                } else {
-                    entryFile.parentFile?.mkdirs()
-                    FileOutputStream(entryFile).use { output ->
-                        tar.copyTo(output)
-                    }
-                    if (entry.mode and 0b001_000_000 != 0) {
-                        entryFile.setExecutable(true, false)
-                    }
-                }
-                entry = tar.nextEntry
+        val header = ByteArray(512)
+        while (true) {
+            // Read 512-byte tar header
+            var bytesRead = 0
+            while (bytesRead < 512) {
+                val n = buffered.read(header, bytesRead, 512 - bytesRead)
+                if (n < 0) { buffered.close(); return }
+                bytesRead += n
             }
+
+            // Check for end-of-archive (two consecutive zero blocks)
+            if (header.all { it == 0.toByte() }) break
+
+            // Parse tar header fields
+            val name = String(header, 0, 100).trim('\u0000', ' ')
+            val modeStr = String(header, 100, 8).trim('\u0000', ' ')
+            val sizeStr = String(header, 124, 12).trim('\u0000', ' ')
+            val typeFlag = header[156]
+            val prefix = String(header, 345, 155).trim('\u0000', ' ')
+
+            val fullName = if (prefix.isNotBlank()) "$prefix/$name" else name
+            if (fullName.isBlank()) continue
+
+            val fileSize = try { sizeStr.toLong(8) } catch (_: Exception) { 0L }
+            val isDir = typeFlag == '5'.code.toByte() || fullName.endsWith("/")
+            val isExecutable = try {
+                val mode = modeStr.toInt(8)
+                mode and 0b001_000_000 != 0
+            } catch (_: Exception) { false }
+
+            val entryFile = File(destDir, fullName)
+
+            // Path traversal protection
+            val canonicalDest = destDir.canonicalPath
+            val canonicalEntry = entryFile.canonicalPath
+            if (!canonicalEntry.startsWith(canonicalDest)) {
+                // Skip dangerous entries, consume their data
+                skipBytes(buffered, fileSize)
+                continue
+            }
+
+            if (isDir) {
+                entryFile.mkdirs()
+            } else {
+                entryFile.parentFile?.mkdirs()
+                FileOutputStream(entryFile).use { output ->
+                    var remaining = fileSize
+                    val buf = ByteArray(8192)
+                    while (remaining > 0) {
+                        val toRead = minOf(remaining.toInt(), buf.size)
+                        val n = buffered.read(buf, 0, toRead)
+                        if (n < 0) break
+                        output.write(buf, 0, n)
+                        remaining -= n
+                    }
+                }
+                if (isExecutable) entryFile.setExecutable(true, false)
+            }
+
+            // Tar pads file data to 512-byte boundaries
+            val padding = (512 - (fileSize % 512)) % 512
+            skipBytes(buffered, padding)
+        }
+        buffered.close()
+    }
+
+    private fun skipBytes(stream: java.io.InputStream, count: Long) {
+        var remaining = count
+        val buf = ByteArray(8192)
+        while (remaining > 0) {
+            val toRead = minOf(remaining.toInt(), buf.size)
+            val n = stream.read(buf, 0, toRead)
+            if (n < 0) break
+            remaining -= n
         }
     }
 
