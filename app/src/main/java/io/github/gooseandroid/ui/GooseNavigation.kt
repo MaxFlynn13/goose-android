@@ -135,7 +135,13 @@ fun GooseNavigation(sharedText: String? = null) {
             }
             composable("doctor") { DoctorScreen(onBack = { navController.popBackStack() }) }
             composable("logs") { LogViewerScreen(onBack = { navController.popBackStack() }) }
-            composable("runtimes") { RuntimePacksScreen(onBack = { navController.popBackStack() }) }
+            composable("runtimes") {
+                val packManager = remember { io.github.gooseandroid.runtime.RuntimePackManager(navController.context) }
+                RuntimePacksScreen(
+                    packManager = packManager,
+                    onNavigateBack = { navController.popBackStack() }
+                )
+            }
             composable("workspace") { WorkspaceScreen(onBack = { navController.popBackStack() }) }
         }
 
