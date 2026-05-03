@@ -115,25 +115,23 @@ class RustBinaryEngine(private val context: Context) : GooseEngine {
             client.sendPrompt(message)
 
             // Collect ACP notifications and convert to AgentEvents
+            // Note: notification.params is com.google.gson.JsonObject, not org.json.JSONObject
             client.notifications.collect { notification ->
+                fun safeGet(key: String): String =
+                    try { notification.params.get(key)?.asString ?: "" } catch (_: Exception) { "" }
+
                 when (notification.method) {
                     "notifications/progress" -> {
-                        val text = notification.params.optString("text", "")
+                        val text = safeGet("text")
                         if (text.isNotBlank()) {
                             emit(AgentEvent.Token(text))
                         }
                     }
                     "notifications/tool_call" -> {
-                        val name = notification.params.optString("name", "")
-                        val id = notification.params.optString("id", "")
-                        val input = notification.params.optString("input", "")
-                        emit(AgentEvent.ToolStart(id, name, input))
+                        emit(AgentEvent.ToolStart(safeGet("id"), safeGet("name"), safeGet("input")))
                     }
                     "notifications/tool_result" -> {
-                        val name = notification.params.optString("name", "")
-                        val id = notification.params.optString("id", "")
-                        val output = notification.params.optString("output", "")
-                        emit(AgentEvent.ToolEnd(id, name, output))
+                        emit(AgentEvent.ToolEnd(safeGet("id"), safeGet("name"), safeGet("output")))
                     }
                 }
             }
