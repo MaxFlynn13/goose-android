@@ -73,8 +73,6 @@ class HttpTransport(
             _isConnected = true
 
             // Optionally open a GET SSE stream for server-initiated notifications.
-            // Many Streamable-HTTP servers only use POST responses for SSE, so
-            // we start the GET listener best-effort and don't fail if it errors.
             scope.launch {
                 try {
                     openSseListener()
@@ -82,6 +80,7 @@ class HttpTransport(
                     Log.d(TAG, "GET SSE listener not available: ${e.message}")
                 }
             }
+            Unit  // Explicit Unit return for Result<Unit>
         }
     }
 

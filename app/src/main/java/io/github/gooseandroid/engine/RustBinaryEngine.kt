@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import io.github.gooseandroid.GoosePortHolder
 import io.github.gooseandroid.acp.AcpClient
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -115,10 +116,10 @@ class RustBinaryEngine(private val context: Context) : GooseEngine {
             client.sendPrompt(message)
 
             // Collect ACP notifications and convert to AgentEvents
-            // Note: notification.params is com.google.gson.JsonObject, not org.json.JSONObject
+            // notification.params is kotlinx.serialization.json.JsonObject
             client.notifications.collect { notification ->
                 fun safeGet(key: String): String =
-                    try { notification.params.get(key)?.asString ?: "" } catch (_: Exception) { "" }
+                    try { notification.params[key]?.jsonPrimitive?.content ?: "" } catch (_: Exception) { "" }
 
                 when (notification.method) {
                     "notifications/progress" -> {
@@ -142,7 +143,8 @@ class RustBinaryEngine(private val context: Context) : GooseEngine {
     }
 
     override fun cancel() {
-        acpClient?.cancel()
+        // Fire and forget — cancel is best-effort
+        kotlinx.coroutines.GlobalScope.launch { acpClient?.cancel() }
     }
 
     override suspend fun shutdown() {

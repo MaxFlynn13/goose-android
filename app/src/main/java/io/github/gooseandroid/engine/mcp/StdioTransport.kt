@@ -104,6 +104,7 @@ class StdioTransport(
 
             _isConnected = true
             Log.d(TAG, "Process started (pid=${getPid(proc)})")
+            Unit  // Explicit Unit return for Result<Unit>
         }
     }
 
