@@ -169,7 +169,7 @@ class GoogleProvider(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Stream error: ${e.message}", e)
-            trySend(StreamEvent.Error(e.message ?: "Unknown streaming error"))
+            trySend(StreamEvent.Error("${e.javaClass.simpleName}: ${e.message ?: "Connection failed"}"))
         }
 
         close()

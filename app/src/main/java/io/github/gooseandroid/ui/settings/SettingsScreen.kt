@@ -353,7 +353,7 @@ fun SettingsScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConfigureProviderScreen(onBack: () -> Unit) {
+fun ConfigureProviderScreen(onBack: () -> Unit, onNavigateToModels: () -> Unit = {}) {
     val context = LocalContext.current
     val settingsStore = remember { SettingsStore(context) }
     val scope = rememberCoroutineScope()
@@ -612,6 +612,48 @@ fun ConfigureProviderScreen(onBack: () -> Unit) {
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
+                                    }
+                                }
+                            }
+
+                            // Download GGUF Models card
+                            item {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                SectionHeader(title = "Download Models", icon = Icons.Filled.Download)
+                            }
+                            item {
+                                Card(
+                                    onClick = onNavigateToModels,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Download,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "GGUF Model Downloads",
+                                                style = MaterialTheme.typography.titleSmall
+                                            )
+                                            Text(
+                                                text = "Download and manage local AI models (Gemma, Llama, Phi, Qwen)",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.ArrowForward,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
                                 }
                             }

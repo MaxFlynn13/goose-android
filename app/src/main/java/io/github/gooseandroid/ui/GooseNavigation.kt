@@ -139,7 +139,10 @@ fun GooseNavigation(sharedText: String? = null) {
                 )
             }
             composable("configure_provider") {
-                ConfigureProviderScreen(onBack = { navController.popBackStack() })
+                ConfigureProviderScreen(
+                    onBack = { navController.popBackStack() },
+                    onNavigateToModels = { navController.navigate("models") }
+                )
             }
             composable("runtimes") {
                 val packManager = remember { io.github.gooseandroid.runtime.RuntimePackManager(navController.context) }
@@ -150,6 +153,7 @@ fun GooseNavigation(sharedText: String? = null) {
             }
             composable("logs") { LogViewerScreen(onBack = { navController.popBackStack() }) }
             composable("doctor") { DoctorScreen(onBack = { navController.popBackStack() }) }
+            composable("models") { io.github.gooseandroid.ui.models.ModelsScreen(onBack = { navController.popBackStack() }) }
         }
 
         // Scrim

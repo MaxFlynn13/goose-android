@@ -121,8 +121,12 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
      */
     private suspend fun refreshProvider(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val providerId = settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER).first()
-            val modelId = settingsStore.getString(SettingsKeys.ACTIVE_MODEL).first()
+            val providerId = try {
+                settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER, "anthropic").first()
+            } catch (_: Exception) { "anthropic" }
+            val modelId = try {
+                settingsStore.getString(SettingsKeys.ACTIVE_MODEL, "claude-sonnet-4-20250514").first()
+            } catch (_: Exception) { "claude-sonnet-4-20250514" }
 
             if (providerId.isBlank()) {
                 // Try to find any configured key
@@ -187,13 +191,18 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
     }
 
     private suspend fun getApiKeyForProvider(providerId: String): String {
-        return when (providerId) {
-            "anthropic" -> settingsStore.getString(SettingsKeys.ANTHROPIC_API_KEY).first()
-            "openai" -> settingsStore.getString(SettingsKeys.OPENAI_API_KEY).first()
-            "google" -> settingsStore.getString(SettingsKeys.GOOGLE_API_KEY).first()
-            "mistral" -> settingsStore.getString(SettingsKeys.MISTRAL_API_KEY).first()
-            "openrouter" -> settingsStore.getString(SettingsKeys.OPENROUTER_API_KEY).first()
-            else -> ""
+        return try {
+            when (providerId) {
+                "anthropic" -> settingsStore.getString(SettingsKeys.ANTHROPIC_API_KEY).first()
+                "openai" -> settingsStore.getString(SettingsKeys.OPENAI_API_KEY).first()
+                "google" -> settingsStore.getString(SettingsKeys.GOOGLE_API_KEY).first()
+                "mistral" -> settingsStore.getString(SettingsKeys.MISTRAL_API_KEY).first()
+                "openrouter" -> settingsStore.getString(SettingsKeys.OPENROUTER_API_KEY).first()
+                else -> ""
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read API key for $providerId: ${e.message}")
+            ""
         }
     }
 
