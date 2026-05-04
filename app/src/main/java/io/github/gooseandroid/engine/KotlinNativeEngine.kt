@@ -42,12 +42,11 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
     private val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
     private val runtimeManager = io.github.gooseandroid.runtime.RuntimeManager(context)
     private val shellEnv = buildShellEnvironment()
-    private val toolRouter = ToolRouter(workspaceDir, shellEnv)
+    private val toolRouter = ToolRouter(workspaceDir, shellEnv, context)
     private val mcpManager = McpExtensionManager()
 
     private var currentProvider: LlmProvider? = null
     private var currentJob: Job? = null
-    private var agentLoop: StreamingAgentLoop? = null
 
     override suspend fun initialize(): Boolean {
         _status.value = EngineStatus.CONNECTING
@@ -75,11 +74,11 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
         conversationHistory: List<ConversationMessage>,
         systemPrompt: String
     ): Flow<AgentEvent> = flow {
-        // Refresh provider in case settings changed
-        refreshProvider()
+        // Always refresh provider in case settings changed since last message
+        val providerReady = refreshProvider()
 
         val provider = currentProvider
-        if (provider == null) {
+        if (provider == null || !providerReady) {
             emit(AgentEvent.Error(
                 "No AI provider configured.\n\n" +
                 "Go to Settings and add an API key for Anthropic, OpenAI, or Google."
@@ -87,9 +86,8 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             return@flow
         }
 
-        // Create the agent loop with current provider and tools
+        // Create a FRESH agent loop for each message — never reuse stale state
         val loop = StreamingAgentLoop(provider, toolRouter, mcpManager)
-        agentLoop = loop
 
         // Run the agent loop and emit all events
         try {
@@ -107,7 +105,6 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
 
     override fun cancel() {
         currentJob?.cancel()
-        agentLoop = null
     }
 
     override suspend fun shutdown() {
@@ -141,6 +138,12 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             val apiKey = getApiKeyForProvider(providerId)
             if (apiKey.isBlank() && providerId != "ollama") {
                 Log.w(TAG, "No API key for provider: $providerId")
+                // Try fallback to any configured provider
+                val fallback = findFirstConfiguredProvider()
+                if (fallback != null) {
+                    currentProvider = fallback
+                    return@withContext true
+                }
                 currentProvider = null
                 return@withContext false
             }
@@ -150,6 +153,7 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             return@withContext true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to refresh provider", e)
+            currentProvider = null
             return@withContext false
         }
     }

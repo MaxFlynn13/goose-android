@@ -97,9 +97,18 @@ The working directory is the user's project workspace.
         }
 
         // ── Seed message list ───────────────────────────────────────────
+        // The system prompt MUST be the first message so providers handle it correctly
         val messages = mutableListOf<ConversationMessage>()
         messages.add(ConversationMessage(role = "system", content = systemPrompt))
-        messages.addAll(conversationHistory)
+
+        // Add conversation history, but filter out any system messages from history
+        // (we already have our system prompt as the first message)
+        for (histMsg in conversationHistory) {
+            if (histMsg.role == "system") continue
+            messages.add(histMsg)
+        }
+
+        // Add the new user message
         messages.add(ConversationMessage(role = "user", content = userMessage))
 
         // ── Merge built-in + MCP tool definitions ───────────────────────
@@ -112,6 +121,8 @@ The working directory is the user's project workspace.
         while (iteration < maxIterations) {
             iteration++
             Log.i(TAG, "Streaming agent loop iteration $iteration")
+
+            // Support cancellation at the top of each iteration
             currentCoroutineContext().ensureActive()
 
             // State for this single streaming turn
@@ -125,6 +136,7 @@ The working directory is the user's project workspace.
                 val streamFlow: Flow<StreamEvent> = provider.streamChat(messages, toolDefs)
 
                 streamFlow.collect { event ->
+                    // Check for cancellation on every event
                     currentCoroutineContext().ensureActive()
 
                     when (event) {
@@ -132,6 +144,7 @@ The working directory is the user's project workspace.
                             turnText.append(event.text)
                             globalAccumulatedText.append(event.text)
                             // Emit every token immediately so the UI can render it
+                            // The accumulated text is the FULL response so far
                             emit(AgentEvent.Token(globalAccumulatedText.toString()))
                         }
 
@@ -142,9 +155,8 @@ The working directory is the user's project workspace.
 
                         is StreamEvent.ToolCallStart -> {
                             // The provider has detected the start of a tool call.
-                            // We emit a ToolStart event with what we know so far
-                            // (the full input isn't available yet — it streams in
-                            // via ToolCallInput deltas).
+                            // We log it but don't emit to UI yet — we wait for ToolCallEnd
+                            // which has the fully-parsed input.
                             Log.d(TAG, "Tool call starting: ${event.name} (id=${event.id})")
                         }
 
@@ -193,6 +205,7 @@ The working directory is the user's project workspace.
                 // Propagate cancellation — don't swallow it
                 throw e
             } catch (e: Exception) {
+                // Catch provider errors during streaming and emit as AgentEvent.Error
                 Log.e(TAG, "Stream failed on iteration $iteration", e)
                 emit(AgentEvent.Error("Streaming error: ${e.message}"))
                 return@flow
@@ -212,7 +225,8 @@ The working directory is the user's project workspace.
                 return@flow
             }
 
-            // ── Record the assistant turn ───────────────────────────────
+            // ── Record the assistant turn in messages ────────────────────
+            // The assistant message includes both text content and tool call info
             messages.add(ConversationMessage(
                 role = "assistant",
                 content = turnText.toString()
@@ -220,6 +234,7 @@ The working directory is the user's project workspace.
 
             // ── Execute tool calls ──────────────────────────────────────
             for (toolCall in turnToolCalls) {
+                // Check cancellation before each tool execution
                 currentCoroutineContext().ensureActive()
 
                 Log.i(TAG, "Executing tool: ${toolCall.name} (id=${toolCall.id})")
@@ -231,7 +246,8 @@ The working directory is the user's project workspace.
                         "output=${result.output.take(200)})")
                 emit(AgentEvent.ToolEnd(toolCall.id, toolCall.name, result.output, result.isError))
 
-                // Append tool result for the next LLM turn
+                // Append tool result for the next LLM turn in the correct format
+                // The role is "tool" with the toolCallId so the provider can match it
                 messages.add(ConversationMessage(
                     role = "tool",
                     content = result.output,
@@ -243,8 +259,13 @@ The working directory is the user's project workspace.
             // Loop back — the LLM will see tool results and stream its next response
         }
 
-        // ── Safety limit ────────────────────────────────────────────────
+        // ── Safety limit reached ────────────────────────────────────────
+        // Even if we hit max iterations, emit Complete with whatever text we have
+        // so the UI finalizes properly, then emit the error
         Log.w(TAG, "Streaming agent loop hit max iterations ($maxIterations)")
+        if (globalAccumulatedText.isNotEmpty()) {
+            emit(AgentEvent.Complete(globalAccumulatedText.toString()))
+        }
         emit(
             AgentEvent.Error(
                 "Reached maximum number of steps ($maxIterations). " +

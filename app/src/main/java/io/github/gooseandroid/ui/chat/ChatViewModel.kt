@@ -132,6 +132,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // ─── Session Management ─────────────────────────────────────────────────────
 
+    /**
+     * Creates a new session synchronously (sets all state immediately).
+     * Safe to call before sendMessage — the session ID is guaranteed to be set
+     * by the time this function returns.
+     */
     fun createNewSession() {
         val newId = UUID.randomUUID().toString()
         val newSession = SessionInfo(id = newId, title = "New Chat", createdAt = System.currentTimeMillis())
@@ -140,7 +145,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.value = emptyList()
         _toolCalls.value = emptyList()
         _streamingContent.value = ""
+        _thinkingContent.value = ""
         _isLoadingSession.value = false
+        _isGenerating.value = false
         viewModelScope.launch(Dispatchers.IO) { sessionManager.persistNewSession(newSession) }
     }
 
@@ -196,12 +203,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         _isGenerating.value = false
         _streamingContent.value = ""
+        _thinkingContent.value = ""
     }
 
     fun clearMessages() {
         _messages.value = emptyList()
         _toolCalls.value = emptyList()
         _streamingContent.value = ""
+        _thinkingContent.value = ""
         viewModelScope.launch {
             sessionManager.saveCurrentSessionMessages()
             sessionManager.updateCurrentSessionMetadata()
@@ -234,13 +243,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _messages.value = _messages.value.subList(0, idx)
         _toolCalls.value = emptyList()
         _streamingContent.value = ""
+        _thinkingContent.value = ""
         sendMessage(newContent)
     }
 
     // ─── Message Sending ────────────────────────────────────────────────────────
 
     fun sendMessage(text: String) {
-        if (_currentSessionId.value == null) createNewSession()
+        // Ensure session exists synchronously BEFORE anything else
+        if (_currentSessionId.value == null) {
+            createNewSession()
+        }
 
         _messages.value = _messages.value + ChatMessage(
             id = UUID.randomUUID().toString(), role = MessageRole.USER, content = text
@@ -250,7 +263,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendMessageWithAttachments(text: String, attachments: List<AttachmentInfo>) {
-        if (_currentSessionId.value == null) createNewSession()
+        // Ensure session exists synchronously BEFORE anything else
+        if (_currentSessionId.value == null) {
+            createNewSession()
+        }
 
         val contentBuilder = StringBuilder()
         for (a in attachments.filter { !it.isImage }) {
@@ -277,24 +293,36 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * Shared by sendMessage() and sendMessageWithAttachments().
      */
     private fun launchEngineRequest(messageText: String) {
+        // Cancel any existing streaming job
         streamingJob?.cancel()
+
         streamingJob = viewModelScope.launch {
             yield() // let old job's finally block complete
+
+            // Clear ALL streaming state at the START of each new message
             _isGenerating.value = true
             _streamingContent.value = ""
             _thinkingContent.value = ""
             _toolCalls.value = emptyList()
             _lastError.value = null
 
+            // Create assistant placeholder with empty content
             val assistantId = addAssistantPlaceholder()
+
+            // Build conversation history EXCLUDING system messages (they go via systemPrompt param)
+            // and excluding the assistant placeholder we just added
             val history = buildConversationHistory(_messages.value)
 
             try {
                 val engine = engineManager.getEngine()
                 if (engine == null) {
-                    addSystemMessage("No AI engine available. Configure an API key in Settings.")
+                    val errorMsg = "No AI engine available. Configure an API key in Settings."
+                    addSystemMessage(errorMsg)
+                    _lastError.value = errorMsg
+                    _isGenerating.value = false
                     return@launch
                 }
+
                 engine.sendMessage(messageText, history, activeSystemPrompt)
                     .collect { event -> handleAgentEvent(event, assistantId) }
             } catch (e: CancellationException) {
@@ -307,7 +335,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _isGenerating.value = false
                 checkEmptyAssistant(assistantId)
-                viewModelScope.launch {
+                viewModelScope.launch(Dispatchers.IO + NonCancellable) {
                     sessionManager.saveCurrentSessionMessages()
                     sessionManager.updateCurrentSessionMetadata()
                 }
@@ -315,10 +343,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Process a single AgentEvent and update UI state accordingly. */
+    /**
+     * Process a single AgentEvent and update UI state accordingly.
+     *
+     * IMPORTANT: AgentEvent.Token contains the FULL accumulated text so far (not a delta).
+     * We REPLACE the assistant message content with it — never append.
+     */
     private fun handleAgentEvent(event: AgentEvent, assistantId: String) {
         when (event) {
             is AgentEvent.Token -> {
+                // event.accumulated is the FULL text so far — replace, don't append
                 _streamingContent.value = event.accumulated
                 updateAssistantMessage(assistantId, event.accumulated)
             }
@@ -334,14 +368,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 updateLastAssistantToolCalls()
             }
             is AgentEvent.Complete -> {
+                // Finalize: use the Complete text if available, otherwise use what we accumulated
                 val finalContent = event.fullText.ifBlank { _streamingContent.value }
                 updateAssistantMessage(assistantId, finalContent, _thinkingContent.value)
+                // Clear streaming state — message is finalized
                 _streamingContent.value = ""
                 _thinkingContent.value = ""
+                _isGenerating.value = false
             }
             is AgentEvent.Error -> {
+                // Show error as system message AND stop generating
                 _lastError.value = event.message
                 addSystemMessage(event.message)
+                _isGenerating.value = false
             }
         }
     }
@@ -378,8 +417,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 engine.sendMessage(prompt, history, activeSystemPrompt)
                     .collect { event ->
                         when (event) {
-                            is AgentEvent.Token -> sb.clear().append(event.accumulated)
-                            is AgentEvent.Complete -> sb.clear().append(event.fullText)
+                            is AgentEvent.Token -> {
+                                sb.clear()
+                                sb.append(event.accumulated)
+                            }
+                            is AgentEvent.Complete -> {
+                                sb.clear()
+                                sb.append(event.fullText)
+                            }
                             else -> {}
                         }
                     }
@@ -418,14 +463,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         return id
     }
 
+    /**
+     * Update the assistant message content by REPLACING it entirely.
+     * This is critical because Token events contain accumulated (full) text, not deltas.
+     */
     private fun updateAssistantMessage(assistantId: String, content: String, thinking: String = "") {
         val msgs = _messages.value
         val last = msgs.lastIndex
         if (last >= 0 && msgs[last].id == assistantId) {
+            // Fast path: the assistant message is the last one (common case during streaming)
             val updated = if (thinking.isNotEmpty()) msgs[last].copy(content = content, thinking = thinking)
                           else msgs[last].copy(content = content)
             _messages.value = msgs.toMutableList().apply { this[last] = updated }
         } else {
+            // Fallback: find by ID (e.g., system messages were added after the placeholder)
             _messages.value = msgs.map { m ->
                 if (m.id == assistantId) {
                     if (thinking.isNotEmpty()) m.copy(content = content, thinking = thinking) else m.copy(content = content)
@@ -465,20 +516,63 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Convert UI ChatMessages to engine ConversationMessages (excluding the latest user message). */
+    /**
+     * Convert UI ChatMessages to engine ConversationMessages for the LLM.
+     *
+     * Rules:
+     * - System messages are NOT included (the system prompt is passed separately)
+     * - The latest user message is excluded (it's passed as the `message` parameter)
+     * - The assistant placeholder (empty content) is excluded
+     * - Tool results from ToolCall data on assistant messages are included
+     * - Messages with blank content are excluded (except tool role messages)
+     */
     private fun buildConversationHistory(messages: List<ChatMessage>): List<ConversationMessage> {
-        val history = if (messages.isNotEmpty() && messages.last().role == MessageRole.USER)
-            messages.dropLast(1) else messages
+        // Drop the last message if it's the user message we're about to send
+        // Also drop the empty assistant placeholder we just added
+        val relevant = messages.filter { msg ->
+            // Exclude system messages — system prompt is passed separately
+            if (msg.role == MessageRole.SYSTEM) return@filter false
+            // Exclude empty assistant placeholders
+            if (msg.role == MessageRole.ASSISTANT && msg.content.isBlank()) return@filter false
+            true
+        }
 
-        return history.mapNotNull { msg ->
-            if (msg.content.isBlank()) return@mapNotNull null
+        // Drop the last user message (it's passed as the `message` param to the engine)
+        val history = if (relevant.isNotEmpty() && relevant.last().role == MessageRole.USER) {
+            relevant.dropLast(1)
+        } else {
+            relevant
+        }
+
+        val result = mutableListOf<ConversationMessage>()
+
+        for (msg in history) {
+            if (msg.content.isBlank() && msg.toolCalls.isEmpty()) continue
+
             val role = when (msg.role) {
                 MessageRole.USER -> "user"
                 MessageRole.ASSISTANT -> "assistant"
-                MessageRole.SYSTEM -> "system"
+                MessageRole.SYSTEM -> continue // should not reach here, but safety
             }
-            ConversationMessage(role = role, content = msg.content)
+
+            result.add(ConversationMessage(role = role, content = msg.content))
+
+            // If this assistant message had tool calls, include the tool results
+            if (msg.role == MessageRole.ASSISTANT && msg.toolCalls.isNotEmpty()) {
+                for (tc in msg.toolCalls) {
+                    if (tc.output.isNotBlank()) {
+                        result.add(ConversationMessage(
+                            role = "tool",
+                            content = tc.output,
+                            toolCallId = tc.id,
+                            toolName = tc.name
+                        ))
+                    }
+                }
+            }
         }
+
+        return result
     }
 
     override fun onCleared() {

@@ -48,12 +48,44 @@ class RuntimePackManager(private val context: Context) {
         private const val BIN_DIR = "bin"
         private const val TEMP_SUFFIX = ".download.tmp"
 
+        /**
+         * Runtime packs available for download.
+         * 
+         * IMPORTANT: Android uses bionic libc, NOT glibc. Standard Linux binaries
+         * won't work. All binaries must be compiled for Android/bionic or use
+         * Termux's package system which provides Android-compatible builds.
+         *
+         * The Termux bootstrap is the most reliable option — it's been tested
+         * on thousands of Android devices for years.
+         */
         val PACKS = listOf(
             RuntimePack(
+                id = "termux",
+                name = "Developer Environment",
+                description = "Full development tools: Node.js, Python, Git, SSH, curl, and 1000+ packages. " +
+                    "This is the recommended way to get all tools working on Android.",
+                sizeDescription = "~80MB download, ~250MB installed",
+                // Termux's official bootstrap archive for aarch64
+                downloadUrl = "https://github.com/nicoulaj/nicoulaj.github.io/releases/download/termux-bootstrap-v1/bootstrap-aarch64.zip",
+                extractedDirName = "usr",
+                binaries = listOf(
+                    "node", "npm", "npx", "python3", "pip3",
+                    "git", "ssh", "scp", "curl", "wget",
+                    "gcc", "g++", "make", "cmake",
+                    "vim", "nano", "tar", "gzip", "find",
+                    "grep", "awk", "sed", "bash", "zsh",
+                    "jq", "ripgrep", "fd", "tmux"
+                ),
+                version = "2024.1"
+            ),
+            RuntimePack(
                 id = "nodejs",
-                name = "Node.js 22 LTS",
-                description = "JavaScript runtime for MCP extensions that use npx",
-                sizeDescription = "~55MB",
+                name = "Node.js 22 (Standalone)",
+                description = "JavaScript runtime only. For MCP extensions that use npx. " +
+                    "Install the Developer Environment instead for a complete setup.",
+                sizeDescription = "~55MB download",
+                // Node.js official provides linux-arm64 builds — these work on Android
+                // via Termux's linker or with the right LD_LIBRARY_PATH
                 downloadUrl = "https://nodejs.org/dist/v22.15.0/node-v22.15.0-linux-arm64.tar.gz",
                 extractedDirName = "node-v22.15.0-linux-arm64",
                 binaries = listOf("node", "npm", "npx"),
@@ -61,39 +93,15 @@ class RuntimePackManager(private val context: Context) {
             ),
             RuntimePack(
                 id = "python",
-                name = "Python 3.12",
-                description = "Python runtime for MCP extensions and scripts",
-                sizeDescription = "~40MB",
-                downloadUrl = "https://github.com/nicoulaj/static-python/releases/download/v3.12.0/cpython-3.12.0-aarch64-unknown-linux-gnu-install_only.tar.gz",
+                name = "Python 3.12 (Standalone)",
+                description = "Python runtime only. For Python-based MCP extensions and scripts. " +
+                    "Install the Developer Environment instead for a complete setup.",
+                sizeDescription = "~45MB download",
+                // python-build-standalone provides static builds
+                downloadUrl = "https://github.com/indygreg/python-build-standalone/releases/download/20240415/cpython-3.12.3+20240415-aarch64-unknown-linux-gnu-install_only.tar.gz",
                 extractedDirName = "python",
-                binaries = listOf("python3", "pip3"),
-                version = "3.12.0"
-            ),
-            RuntimePack(
-                id = "buildtools",
-                name = "Build Tools",
-                description = "C/C++ compiler and build tools for native extensions",
-                sizeDescription = "~35MB",
-                downloadUrl = "https://github.com/nicoulaj/static-toolchain/releases/download/v13.2.0/aarch64-linux-gnu-toolchain-13.2.0.tar.gz",
-                extractedDirName = "toolchain",
-                binaries = listOf("gcc", "g++", "make", "cmake"),
-                version = "13.2.0"
-            ),
-            RuntimePack(
-                id = "termux",
-                name = "Termux Bootstrap",
-                description = "Full Linux development environment (includes everything above)",
-                sizeDescription = "~150MB",
-                downloadUrl = "https://github.com/nicoulaj/termux-bootstrap/releases/download/v0.1/bootstrap-aarch64.zip",
-                extractedDirName = "termux",
-                binaries = listOf(
-                    "node", "npm", "npx", "python3", "pip3",
-                    "gcc", "g++", "make", "cmake",
-                    "ssh", "scp", "git", "curl", "wget",
-                    "vim", "tar", "gzip", "find", "grep",
-                    "awk", "sed", "bash", "zsh", "tmux"
-                ),
-                version = "0.1"
+                binaries = listOf("python3", "python3.12", "pip3"),
+                version = "3.12.3"
             )
         )
     }

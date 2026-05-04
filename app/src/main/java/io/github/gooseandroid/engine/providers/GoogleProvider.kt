@@ -21,6 +21,14 @@ import java.util.concurrent.TimeUnit
 /**
  * Google Gemini provider implementation with full tool use (function calling) support.
  * Uses the Generative Language API.
+ *
+ * Key differences from OpenAI/Anthropic:
+ * - Tools are sent as `tools: [{ functionDeclarations: [...] }]`
+ * - Schema types must be UPPERCASE: "STRING", "OBJECT", "ARRAY", "NUMBER", "BOOLEAN", "INTEGER"
+ * - Tool call responses use `functionResponse` parts
+ * - After a tool call, the assistant's functionCall is echoed as a `model` message,
+ *   then the tool result is sent as a `user` message with `functionResponse` parts
+ * - Streaming responses contain `functionCall` parts in candidate content
  */
 class GoogleProvider(
     private val apiKey: String,
@@ -50,6 +58,8 @@ class GoogleProvider(
             val url = "$BASE_URL/$modelId:generateContent"
             val request = buildRequest(url, body)
 
+            Log.d(TAG, "Sending non-streaming request to $url")
+
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string() ?: ""
 
@@ -78,6 +88,8 @@ class GoogleProvider(
             val url = "$BASE_URL/$modelId:streamGenerateContent?alt=sse"
             val request = buildRequest(url, body)
 
+            Log.d(TAG, "Sending streaming request to $url")
+
             val response = client.newCall(request).execute()
 
             if (!response.isSuccessful) {
@@ -91,6 +103,7 @@ class GoogleProvider(
             val reader = BufferedReader(InputStreamReader(response.body!!.byteStream()))
             val fullText = StringBuilder()
             val toolCalls = mutableListOf<LlmToolCall>()
+            var doneEmitted = false
 
             var line: String?
             while (reader.readLine().also { line = it } != null) {
@@ -118,12 +131,14 @@ class GoogleProvider(
                             trySend(StreamEvent.Token(text))
                         }
 
-                        // Handle function call parts
+                        // Handle function call parts (Google's tool call format)
                         val functionCall = part.optJSONObject("functionCall")
                         if (functionCall != null) {
                             val name = functionCall.optString("name", "")
                             val args = functionCall.optJSONObject("args") ?: JSONObject()
                             val id = "call_${UUID.randomUUID().toString().replace("-", "").take(24)}"
+
+                            Log.d(TAG, "Stream: functionCall detected: $name")
 
                             trySend(StreamEvent.ToolCallStart(id, name))
                             trySend(StreamEvent.ToolCallInput(id, args.toString()))
@@ -137,6 +152,7 @@ class GoogleProvider(
                     // Check for finish reason
                     val finishReason = candidate.optString("finishReason", "")
                     if (finishReason == "STOP" || finishReason == "MAX_TOKENS") {
+                        doneEmitted = true
                         trySend(StreamEvent.Done(fullText.toString(), toolCalls.toList()))
                     }
                 } catch (e: Exception) {
@@ -144,17 +160,13 @@ class GoogleProvider(
                 }
             }
 
-            // If we didn't get a finish reason event, emit Done anyway
-            if (toolCalls.isNotEmpty() || fullText.isNotEmpty()) {
-                // Only emit if we haven't already (check by seeing if Done was sent)
-                // Since Done is terminal, the flow will close after
-            }
-
             reader.close()
             response.close()
 
-            // Always ensure Done is emitted
-            trySend(StreamEvent.Done(fullText.toString(), toolCalls.toList()))
+            // Always ensure Done is emitted exactly once
+            if (!doneEmitted) {
+                trySend(StreamEvent.Done(fullText.toString(), toolCalls.toList()))
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Stream error: ${e.message}", e)
             trySend(StreamEvent.Error(e.message ?: "Unknown streaming error"))
@@ -163,6 +175,8 @@ class GoogleProvider(
         close()
         awaitClose()
     }
+
+    // ── Request building ────────────────────────────────────────────────────
 
     private fun buildRequestBody(
         messages: List<ConversationMessage>,
@@ -184,17 +198,12 @@ class GoogleProvider(
             body.put("systemInstruction", systemInstruction)
         }
 
-        // Build contents array
-        val contents = JSONArray()
-        for (msg in nonSystemMessages) {
-            val contentObj = buildContentFromMessage(msg)
-            if (contentObj != null) {
-                contents.put(contentObj)
-            }
-        }
+        // Build contents array — Google requires alternating user/model roles
+        // and tool results have a specific format
+        val contents = buildContentsArray(nonSystemMessages)
         body.put("contents", contents)
 
-        // Build tools array in Google format
+        // Build tools array in Google format: [{ functionDeclarations: [...] }]
         if (tools.isNotEmpty()) {
             val toolsArray = JSONArray()
             val toolDeclarations = JSONObject()
@@ -213,78 +222,270 @@ class GoogleProvider(
         generationConfig.put("maxOutputTokens", 8192)
         body.put("generationConfig", generationConfig)
 
+        Log.d(TAG, "Request body contents count: ${contents.length()}, tools: ${tools.size}")
+
         return body.toString()
     }
 
-    private fun buildContentFromMessage(msg: ConversationMessage): JSONObject? {
-        val contentObj = JSONObject()
-        val parts = JSONArray()
+    /**
+     * Build the contents array for Google's API.
+     *
+     * Google requires:
+     * - Roles alternate between "user" and "model"
+     * - After a tool call, the model's functionCall is echoed as a "model" message
+     * - Tool results are sent as "user" messages with functionResponse parts
+     * - Adjacent messages with the same role must be merged
+     */
+    private fun buildContentsArray(messages: List<ConversationMessage>): JSONArray {
+        val contents = JSONArray()
 
-        when (msg.role) {
-            "user" -> {
-                contentObj.put("role", "user")
-                val textPart = JSONObject()
-                textPart.put("text", msg.content)
-                parts.put(textPart)
-            }
+        // We need to handle the conversion carefully:
+        // - "user" → role: "user", text part
+        // - "assistant" → role: "model", text part (may also have functionCall parts)
+        // - "tool" → role: "user", functionResponse part
+        //
+        // Google requires that after a model message with functionCall,
+        // the next message is a user message with functionResponse.
+        // We also need to avoid consecutive same-role messages.
 
-            "assistant" -> {
-                contentObj.put("role", "model")
-                if (msg.content.isNotEmpty()) {
+        var i = 0
+        while (i < messages.size) {
+            val msg = messages[i]
+
+            when (msg.role) {
+                "user" -> {
+                    val contentObj = JSONObject()
+                    contentObj.put("role", "user")
+                    val parts = JSONArray()
                     val textPart = JSONObject()
                     textPart.put("text", msg.content)
                     parts.put(textPart)
+                    contentObj.put("parts", parts)
+                    contents.put(contentObj)
+                    i++
+                }
+
+                "assistant" -> {
+                    val contentObj = JSONObject()
+                    contentObj.put("role", "model")
+                    val parts = JSONArray()
+
+                    // Add text content if present
+                    if (msg.content.isNotEmpty()) {
+                        val textPart = JSONObject()
+                        textPart.put("text", msg.content)
+                        parts.put(textPart)
+                    }
+
+                    // Look ahead: if the next messages are "tool" results,
+                    // it means this assistant message had tool calls.
+                    // We need to reconstruct the functionCall parts for the model message
+                    // and then create a user message with functionResponse parts.
+                    val toolResults = mutableListOf<ConversationMessage>()
+                    var j = i + 1
+                    while (j < messages.size && messages[j].role == "tool") {
+                        toolResults.add(messages[j])
+                        j++
+                    }
+
+                    if (toolResults.isNotEmpty()) {
+                        // Add functionCall parts to the model message for each tool result
+                        for (toolResult in toolResults) {
+                            val functionCallPart = JSONObject()
+                            val functionCall = JSONObject()
+                            functionCall.put("name", toolResult.toolName ?: "unknown")
+                            // We don't have the original args, but Google needs the functionCall
+                            // to match the functionResponse. Use an empty args object.
+                            functionCall.put("args", JSONObject())
+                            functionCallPart.put("functionCall", functionCall)
+                            parts.put(functionCallPart)
+                        }
+
+                        // Ensure model message has at least one part
+                        if (parts.length() == 0) {
+                            val textPart = JSONObject()
+                            textPart.put("text", " ")
+                            parts.put(textPart)
+                        }
+                        contentObj.put("parts", parts)
+                        contents.put(contentObj)
+
+                        // Now create the user message with functionResponse parts
+                        val userResponseObj = JSONObject()
+                        userResponseObj.put("role", "user")
+                        val responseParts = JSONArray()
+
+                        for (toolResult in toolResults) {
+                            val frPart = JSONObject()
+                            val functionResponse = JSONObject()
+                            functionResponse.put("name", toolResult.toolName ?: "unknown")
+
+                            val responseContent = JSONObject()
+                            // Try to parse content as JSON, otherwise wrap as text
+                            try {
+                                val parsed = JSONObject(toolResult.content)
+                                responseContent.put("result", parsed)
+                            } catch (e: Exception) {
+                                val resultWrapper = JSONObject()
+                                resultWrapper.put("output", toolResult.content)
+                                responseContent.put("result", resultWrapper)
+                            }
+                            functionResponse.put("response", responseContent)
+                            frPart.put("functionResponse", functionResponse)
+                            responseParts.put(frPart)
+                        }
+
+                        userResponseObj.put("parts", responseParts)
+                        contents.put(userResponseObj)
+
+                        // Skip past the tool messages we already consumed
+                        i = j
+                    } else {
+                        // No tool results follow — just a plain model message
+                        if (parts.length() == 0) {
+                            val textPart = JSONObject()
+                            textPart.put("text", " ")
+                            parts.put(textPart)
+                        }
+                        contentObj.put("parts", parts)
+                        contents.put(contentObj)
+                        i++
+                    }
+                }
+
+                "tool" -> {
+                    // Orphaned tool result (no preceding assistant message).
+                    // This shouldn't normally happen, but handle it gracefully
+                    // by wrapping it as a user message with functionResponse.
+                    val contentObj = JSONObject()
+                    contentObj.put("role", "user")
+                    val parts = JSONArray()
+
+                    val frPart = JSONObject()
+                    val functionResponse = JSONObject()
+                    functionResponse.put("name", msg.toolName ?: "unknown")
+                    val responseContent = JSONObject()
+                    try {
+                        val parsed = JSONObject(msg.content)
+                        responseContent.put("result", parsed)
+                    } catch (e: Exception) {
+                        val resultWrapper = JSONObject()
+                        resultWrapper.put("output", msg.content)
+                        responseContent.put("result", resultWrapper)
+                    }
+                    functionResponse.put("response", responseContent)
+                    frPart.put("functionResponse", functionResponse)
+                    parts.put(frPart)
+
+                    contentObj.put("parts", parts)
+                    contents.put(contentObj)
+                    i++
+                }
+
+                else -> {
+                    // Skip unknown roles
+                    i++
                 }
             }
-
-            "tool" -> {
-                // Tool results are sent as user messages with functionResponse parts
-                contentObj.put("role", "user")
-                val functionResponse = JSONObject()
-                functionResponse.put("name", msg.toolName ?: "unknown")
-                val responseContent = JSONObject()
-                // Try to parse content as JSON, otherwise wrap in a text field
-                try {
-                    val parsed = JSONObject(msg.content)
-                    responseContent.put("result", parsed)
-                } catch (e: Exception) {
-                    responseContent.put("result", msg.content)
-                }
-                functionResponse.put("response", responseContent)
-
-                val part = JSONObject()
-                part.put("functionResponse", functionResponse)
-                parts.put(part)
-            }
-
-            else -> return null
         }
 
-        if (parts.length() == 0) return null
-        contentObj.put("parts", parts)
-        return contentObj
+        // Google API requires the conversation to not have consecutive same-role messages.
+        // Merge any that slipped through.
+        return mergeConsecutiveSameRole(contents)
     }
 
+    /**
+     * Merge consecutive messages with the same role by combining their parts arrays.
+     * Google's API rejects conversations with adjacent same-role messages.
+     */
+    private fun mergeConsecutiveSameRole(contents: JSONArray): JSONArray {
+        if (contents.length() <= 1) return contents
+
+        val merged = JSONArray()
+        var current = contents.getJSONObject(0)
+
+        for (i in 1 until contents.length()) {
+            val next = contents.getJSONObject(i)
+            if (current.optString("role") == next.optString("role")) {
+                // Merge parts
+                val currentParts = current.optJSONArray("parts") ?: JSONArray()
+                val nextParts = next.optJSONArray("parts") ?: JSONArray()
+                for (j in 0 until nextParts.length()) {
+                    currentParts.put(nextParts.get(j))
+                }
+                current.put("parts", currentParts)
+            } else {
+                merged.put(current)
+                current = next
+            }
+        }
+        merged.put(current)
+
+        return merged
+    }
+
+    // ── Tool schema conversion ──────────────────────────────────────────────
+
+    /**
+     * Convert a tool definition from the common OpenAI format to Google's format.
+     *
+     * Input format (OpenAI):
+     * ```json
+     * {
+     *   "type": "function",
+     *   "function": {
+     *     "name": "shell",
+     *     "description": "...",
+     *     "parameters": { "type": "object", "properties": {...}, "required": [...] }
+     *   }
+     * }
+     * ```
+     *
+     * Output format (Google functionDeclaration):
+     * ```json
+     * {
+     *   "name": "shell",
+     *   "description": "...",
+     *   "parameters": { "type": "OBJECT", "properties": {...}, "required": [...] }
+     * }
+     * ```
+     */
     private fun convertToolToGoogleFormat(tool: JSONObject): JSONObject {
         val declaration = JSONObject()
-        declaration.put("name", tool.optString("name", ""))
-        declaration.put("description", tool.optString("description", ""))
 
-        // Get the schema from either key
-        val schema = tool.optJSONObject("parameters")
-            ?: tool.optJSONObject("input_schema")
-            ?: JSONObject().apply {
-                put("type", "OBJECT")
-                put("properties", JSONObject())
-            }
+        // Extract from OpenAI wrapper if present
+        val functionObj = tool.optJSONObject("function")
+        if (functionObj != null) {
+            declaration.put("name", functionObj.optString("name", ""))
+            declaration.put("description", functionObj.optString("description", ""))
 
-        // Convert schema types to uppercase for Google format
-        val googleSchema = convertSchemaToGoogleFormat(schema)
-        declaration.put("parameters", googleSchema)
+            val schema = functionObj.optJSONObject("parameters")
+                ?: JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                }
+            declaration.put("parameters", convertSchemaToGoogleFormat(schema))
+        } else {
+            // Flat format (name, description, parameters at top level)
+            declaration.put("name", tool.optString("name", ""))
+            declaration.put("description", tool.optString("description", ""))
+
+            val schema = tool.optJSONObject("parameters")
+                ?: tool.optJSONObject("input_schema")
+                ?: JSONObject().apply {
+                    put("type", "OBJECT")
+                    put("properties", JSONObject())
+                }
+            declaration.put("parameters", convertSchemaToGoogleFormat(schema))
+        }
 
         return declaration
     }
 
+    /**
+     * Recursively convert JSON Schema types to Google's UPPERCASE format.
+     * Google requires: STRING, OBJECT, ARRAY, NUMBER, BOOLEAN, INTEGER
+     */
     private fun convertSchemaToGoogleFormat(schema: JSONObject): JSONObject {
         val result = JSONObject()
 
@@ -307,7 +508,7 @@ class GoogleProvider(
             result.put("properties", googleProperties)
         }
 
-        // Copy required array
+        // Copy required array (Google uses the same format as OpenAI)
         val required = schema.optJSONArray("required")
         if (required != null) {
             result.put("required", required)
@@ -334,6 +535,8 @@ class GoogleProvider(
         return result
     }
 
+    // ── HTTP request building ───────────────────────────────────────────────
+
     private fun buildRequest(url: String, body: String): Request {
         return Request.Builder()
             .url(url)
@@ -343,10 +546,11 @@ class GoogleProvider(
             .build()
     }
 
+    // ── Response parsing ────────────────────────────────────────────────────
+
     private fun parseFullResponse(json: JSONObject): LlmResponse {
         val candidates = json.optJSONArray("candidates")
         if (candidates == null || candidates.length() == 0) {
-            // Check for error
             val error = json.optJSONObject("error")
             if (error != null) {
                 val errorMsg = error.optString("message", "Unknown error")
@@ -380,6 +584,7 @@ class GoogleProvider(
                 val args = functionCall.optJSONObject("args") ?: JSONObject()
                 val id = "call_${UUID.randomUUID().toString().replace("-", "").take(24)}"
                 toolCalls.add(LlmToolCall(id, name, args))
+                Log.d(TAG, "Parsed functionCall: $name with args: $args")
             }
         }
 

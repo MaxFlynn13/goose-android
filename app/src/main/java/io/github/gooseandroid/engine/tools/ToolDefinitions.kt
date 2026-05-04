@@ -2,12 +2,12 @@ package io.github.gooseandroid.engine.tools
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 
 // ---------------------------------------------------------------------------
 // Core interfaces & data classes
@@ -86,19 +86,50 @@ class ShellTool(
         required = JSONArray().apply { put("command") }
     )
 
+    /** Timeout in seconds for command execution */
+    private val timeoutSeconds = 60L
+
     override suspend fun execute(input: JSONObject): ToolResult = withContext(Dispatchers.IO) {
         val command = input.optString("command", "").also {
             if (it.isBlank()) return@withContext ToolResult("Error: 'command' is required", isError = true)
         }
 
         try {
+            // Ensure tmp directory exists inside workspace
+            val tmpDir = File(workingDir, ".tmp").apply { mkdirs() }
+
+            // Build PATH: extra env paths + system paths
+            val pathParts = mutableListOf<String>()
+            // Add any paths from extraEnv first
+            val extraPath = extraEnv["PATH"]
+            if (!extraPath.isNullOrBlank()) {
+                pathParts.addAll(extraPath.split(":").filter { it.isNotBlank() })
+            }
+            // Always include system paths
+            if (!pathParts.contains("/system/bin")) pathParts.add("/system/bin")
+            if (!pathParts.contains("/system/xbin")) pathParts.add("/system/xbin")
+
+            // Use "sh" and let PATH resolve it, rather than hardcoding /system/bin/sh
+            // This handles devices where sh is in a different location
             val pb = ProcessBuilder("sh", "-c", command)
                 .directory(workingDir)
                 .redirectErrorStream(true)
-            // Add runtime tools (BusyBox, Git, Node, etc.) to PATH
-            if (extraEnv.isNotEmpty()) {
-                pb.environment().putAll(extraEnv)
+
+            // Set up environment
+            val env = pb.environment()
+            env["HOME"] = workingDir.absolutePath
+            env["TMPDIR"] = tmpDir.absolutePath
+            env["PATH"] = pathParts.joinToString(":")
+            env["LANG"] = "en_US.UTF-8"
+            env["TERM"] = "xterm-256color"
+
+            // Overlay any additional env vars from extraEnv (except PATH which we built above)
+            for ((key, value) in extraEnv) {
+                if (key != "PATH") {
+                    env[key] = value
+                }
             }
+
             val process = pb.start()
 
             val reader = BufferedReader(InputStreamReader(process.inputStream))
@@ -121,15 +152,25 @@ class ShellTool(
                 }
             }
 
-            // Wait with timeout
-            val completed = withTimeoutOrNull(60_000L) {
-                withContext(Dispatchers.IO) { process.waitFor() }
-            }
+            // Wait with a real timeout that kills the process if exceeded
+            val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
 
-            if (completed == null) {
+            if (!finished) {
+                // Process did not complete within timeout — kill it forcibly
                 process.destroyForcibly()
+                // Give it a moment to actually die
+                process.waitFor(2, TimeUnit.SECONDS)
+
+                val exitCode = try { process.exitValue() } catch (_: Exception) { -1 }
                 return@withContext ToolResult(
-                    output = lines.joinToString("\n") + "\n\n[TIMEOUT] Command exceeded 60 second limit and was killed.",
+                    output = buildString {
+                        append(lines.joinToString("\n"))
+                        if (truncated) {
+                            append("\n\n[TRUNCATED] Output exceeded $maxLines lines or ${maxBytes / 1024}KB limit.")
+                        }
+                        append("\n\n[TIMEOUT] Command exceeded ${timeoutSeconds}s limit and was killed.")
+                        append("\nExit code: $exitCode")
+                    },
                     isError = true
                 )
             }

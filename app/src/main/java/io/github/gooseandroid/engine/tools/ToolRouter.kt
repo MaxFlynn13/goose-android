@@ -1,5 +1,6 @@
 package io.github.gooseandroid.engine.tools
 
+import android.content.Context
 import org.json.JSONObject
 import java.io.File
 
@@ -10,9 +11,14 @@ import java.io.File
  * tool definitions (to send to the LLM) and delegates execution here.
  *
  * The primary constructor auto-registers the built-in developer tools
- * (shell, write, edit, tree) scoped to the given workspace directory.
+ * (shell, write, edit, tree) scoped to the given workspace directory,
+ * and optionally registers app control tools if a Context is provided.
  */
-class ToolRouter(workspaceDir: File, shellEnv: Map<String, String> = emptyMap()) {
+class ToolRouter(
+    workspaceDir: File,
+    shellEnv: Map<String, String> = emptyMap(),
+    context: Context? = null
+) {
 
     private val tools = mutableMapOf<String, Tool>()
 
@@ -22,6 +28,15 @@ class ToolRouter(workspaceDir: File, shellEnv: Map<String, String> = emptyMap())
         register(FileWriteTool(workspaceDir))
         register(FileEditTool(workspaceDir))
         register(TreeTool(workspaceDir))
+
+        // App control tools (if context available)
+        context?.let {
+            register(SkillManageTool(it))
+            register(ExtensionManageTool(it))
+            register(BrainManageTool(it))
+            register(ProjectManageTool(it))
+            register(ScheduleTool(it))
+        }
     }
 
     /** Register a tool. Overwrites any existing tool with the same name. */

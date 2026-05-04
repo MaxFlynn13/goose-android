@@ -10,6 +10,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -28,6 +29,7 @@ import java.io.File
  *
  * Built-in extensions are toggled locally.
  * MCP extensions (stdio/http) can be added with config.
+ * Pre-configured extensions can be enabled with one tap.
  */
 
 data class ExtensionInfo(
@@ -94,18 +96,81 @@ val MCP_EXTENSIONS = listOf(
     )
 )
 
-// --- JSON persistence helpers for MCP extension configs ---
+// --- Pre-configured MCP extensions that users can enable with one tap ---
 
 @Serializable
 data class McpExtensionConfig(
     val id: String,
     val name: String,
-    val type: String,
+    val description: String = "",
+    val transport: String = "stdio",
+    val type: String = transport, // alias for backward compat
     val url: String = "",
     val command: String = "",
     val envVars: Map<String, String> = emptyMap(),
-    val args: List<String> = emptyList()
+    val args: List<String> = emptyList(),
+    val requiresRuntime: String = "",
+    val enabled: Boolean = false
 )
+
+val PRECONFIGURED_EXTENSIONS = listOf(
+    McpExtensionConfig(
+        id = "github",
+        name = "GitHub",
+        description = "Create repos, manage issues, PRs, and code search",
+        transport = "stdio",
+        command = "npx -y @modelcontextprotocol/server-github",
+        envVars = mapOf("GITHUB_PERSONAL_ACCESS_TOKEN" to ""),
+        requiresRuntime = "nodejs"
+    ),
+    McpExtensionConfig(
+        id = "filesystem",
+        name = "Filesystem",
+        description = "Read, write, and manage files in the workspace",
+        transport = "stdio",
+        command = "npx -y @modelcontextprotocol/server-filesystem /workspace",
+        envVars = emptyMap(),
+        requiresRuntime = "nodejs"
+    ),
+    McpExtensionConfig(
+        id = "web-search",
+        name = "Web Search",
+        description = "Search the web using Brave Search API",
+        transport = "stdio",
+        command = "npx -y @nicoulaj/mcp-server-brave-search",
+        envVars = mapOf("BRAVE_API_KEY" to ""),
+        requiresRuntime = "nodejs"
+    ),
+    McpExtensionConfig(
+        id = "memory",
+        name = "Memory",
+        description = "Persistent memory for the AI assistant",
+        transport = "stdio",
+        command = "npx -y @modelcontextprotocol/server-memory",
+        envVars = emptyMap(),
+        requiresRuntime = "nodejs"
+    ),
+    McpExtensionConfig(
+        id = "fetch",
+        name = "Web Fetch",
+        description = "Fetch and read web pages, convert HTML to markdown",
+        transport = "stdio",
+        command = "npx -y @modelcontextprotocol/server-fetch",
+        envVars = emptyMap(),
+        requiresRuntime = "nodejs"
+    )
+)
+
+// --- Extension connection status ---
+
+enum class ExtensionStatus {
+    DISCONNECTED,
+    CONNECTING,
+    CONNECTED,
+    ERROR
+}
+
+// --- JSON persistence helpers for MCP extension configs ---
 
 @Serializable
 data class McpExtensionsFile(
@@ -146,9 +211,6 @@ fun ExtensionsScreen(onBack: () -> Unit) {
     val settingsStore = remember { SettingsStore(context) }
     val scope = rememberCoroutineScope()
 
-    // NOTE: Extension toggles save to DataStore for UI state only.
-    // These are not yet communicated to GooseService — that integration
-    // will be added once goose serve is wired up on Android.
     val devEnabled by settingsStore.getBoolean(SettingsKeys.EXTENSION_DEVELOPER, true).collectAsState(initial = true)
     val memEnabled by settingsStore.getBoolean(SettingsKeys.EXTENSION_MEMORY, true).collectAsState(initial = true)
 
@@ -164,6 +226,21 @@ fun ExtensionsScreen(onBack: () -> Unit) {
 
     // State for the MCP Setup dialog
     var setupTarget by remember { mutableStateOf<ExtensionInfo?>(null) }
+
+    // State for pre-configured extension setup
+    var preconfiguredSetupTarget by remember { mutableStateOf<McpExtensionConfig?>(null) }
+
+    // Track connection status for pre-configured extensions
+    val extensionStatuses = remember { mutableStateMapOf<String, ExtensionStatus>() }
+
+    // Initialize statuses from saved configs
+    LaunchedEffect(userExtensions) {
+        for (ext in userExtensions) {
+            if (ext.enabled && !extensionStatuses.containsKey(ext.id)) {
+                extensionStatuses[ext.id] = ExtensionStatus.CONNECTED
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -214,7 +291,71 @@ fun ExtensionsScreen(onBack: () -> Unit) {
                 )
             }
 
-            // MCP Extensions section
+            // Pre-configured MCP Extensions section
+            item {
+                Text(
+                    "Quick Setup Extensions",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp)
+                )
+                Text(
+                    "One-tap MCP extensions. Requires Node.js runtime to be installed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            items(PRECONFIGURED_EXTENSIONS, key = { it.id }) { preconfig ->
+                val savedConfig = userExtensions.find { it.id == preconfig.id }
+                val isEnabled = savedConfig?.enabled == true
+                val status = extensionStatuses[preconfig.id] ?: ExtensionStatus.DISCONNECTED
+
+                PreconfiguredExtensionCard(
+                    config = preconfig,
+                    isEnabled = isEnabled,
+                    status = status,
+                    onEnableClick = {
+                        if (preconfig.envVars.any { it.value.isBlank() }) {
+                            // Needs API key configuration — show setup dialog
+                            preconfiguredSetupTarget = preconfig
+                        } else {
+                            // No env vars needed — enable directly
+                            scope.launch {
+                                extensionStatuses[preconfig.id] = ExtensionStatus.CONNECTING
+                                withContext(Dispatchers.IO) {
+                                    val current = loadMcpConfigs(context)
+                                    val newConfig = preconfig.copy(enabled = true, type = preconfig.transport)
+                                    val updated = current.extensions.filter { it.id != preconfig.id } + newConfig
+                                    saveMcpConfigs(context, McpExtensionsFile(updated))
+                                    userExtensions = updated
+                                }
+                                extensionStatuses[preconfig.id] = ExtensionStatus.CONNECTED
+                            }
+                        }
+                    },
+                    onDisableClick = {
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                val current = loadMcpConfigs(context)
+                                val updated = current.extensions.map {
+                                    if (it.id == preconfig.id) it.copy(enabled = false) else it
+                                }
+                                saveMcpConfigs(context, McpExtensionsFile(updated))
+                                userExtensions = updated
+                            }
+                            extensionStatuses[preconfig.id] = ExtensionStatus.DISCONNECTED
+                        }
+                    },
+                    onConfigureClick = {
+                        preconfiguredSetupTarget = preconfig
+                    }
+                )
+            }
+
+            // MCP Extensions section (legacy cards)
             item {
                 Text(
                     "MCP Extensions",
@@ -240,7 +381,7 @@ fun ExtensionsScreen(onBack: () -> Unit) {
             }
 
             // User-added custom MCP extensions
-            if (userExtensions.isNotEmpty()) {
+            if (userExtensions.any { cfg -> PRECONFIGURED_EXTENSIONS.none { it.id == cfg.id } }) {
                 item {
                     Text(
                         "Custom MCP Extensions",
@@ -251,7 +392,11 @@ fun ExtensionsScreen(onBack: () -> Unit) {
                     )
                 }
 
-                items(userExtensions, key = { it.id }) { cfg ->
+                val customExtensions = userExtensions.filter { cfg ->
+                    PRECONFIGURED_EXTENSIONS.none { it.id == cfg.id }
+                }
+
+                items(customExtensions, key = { it.id }) { cfg ->
                     val ext = ExtensionInfo(
                         id = cfg.id,
                         name = cfg.name,
@@ -279,12 +424,38 @@ fun ExtensionsScreen(onBack: () -> Unit) {
         }
     }
 
+    // Pre-configured extension setup dialog (for API keys)
+    preconfiguredSetupTarget?.let { preconfig ->
+        PreconfiguredSetupDialog(
+            config = preconfig,
+            existingConfig = userExtensions.find { it.id == preconfig.id },
+            onDismiss = { preconfiguredSetupTarget = null },
+            onSave = { envVars ->
+                scope.launch {
+                    extensionStatuses[preconfig.id] = ExtensionStatus.CONNECTING
+                    withContext(Dispatchers.IO) {
+                        val current = loadMcpConfigs(context)
+                        val newConfig = preconfig.copy(
+                            enabled = true,
+                            type = preconfig.transport,
+                            envVars = envVars
+                        )
+                        val updated = current.extensions.filter { it.id != preconfig.id } + newConfig
+                        saveMcpConfigs(context, McpExtensionsFile(updated))
+                        userExtensions = updated
+                    }
+                    extensionStatuses[preconfig.id] = ExtensionStatus.CONNECTED
+                    preconfiguredSetupTarget = null
+                }
+            }
+        )
+    }
+
     // Setup dialog for pre-defined MCP extensions
     setupTarget?.let { ext ->
         McpSetupDialog(
             ext = ext,
-            existingConfig = userExtensions.find { it.id == ext.id }
-                ?: loadMcpConfigs(context).extensions.find { it.id == ext.id },
+            existingConfig = userExtensions.find { it.id == ext.id },
             onDismiss = { setupTarget = null },
             onSave = { url, command, envVars, args ->
                 scope.launch {
@@ -297,7 +468,8 @@ fun ExtensionsScreen(onBack: () -> Unit) {
                             url = url,
                             command = command,
                             envVars = envVars,
-                            args = args
+                            args = args,
+                            enabled = true
                         )
                         val updated = current.extensions.filter { it.id != ext.id } + newConfig
                         saveMcpConfigs(context, McpExtensionsFile(updated))
@@ -324,7 +496,8 @@ fun ExtensionsScreen(onBack: () -> Unit) {
                             url = url,
                             command = command,
                             envVars = envVars,
-                            args = args
+                            args = args,
+                            enabled = true
                         )
                         val updated = current.extensions + newConfig
                         saveMcpConfigs(context, McpExtensionsFile(updated))
@@ -336,6 +509,218 @@ fun ExtensionsScreen(onBack: () -> Unit) {
         )
     }
 }
+
+// ─── Pre-configured Extension Card ─────────────────────────────────────────
+
+@Composable
+private fun PreconfiguredExtensionCard(
+    config: McpExtensionConfig,
+    isEnabled: Boolean,
+    status: ExtensionStatus,
+    onEnableClick: () -> Unit,
+    onDisableClick: () -> Unit,
+    onConfigureClick: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Terminal,
+                            null,
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Text(config.name, style = MaterialTheme.typography.titleSmall)
+
+                        // Status indicator
+                        StatusDot(status)
+                    }
+
+                    Text(
+                        config.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+
+                    // Badges row
+                    Row(
+                        modifier = Modifier.padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (config.requiresRuntime.isNotBlank()) {
+                            SuggestionChip(
+                                onClick = {},
+                                label = {
+                                    Text(
+                                        "Requires ${config.requiresRuntime.replaceFirstChar { it.uppercase() }}",
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                },
+                                modifier = Modifier.height(24.dp),
+                                icon = {
+                                    Icon(
+                                        Icons.Default.Memory,
+                                        null,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            )
+                        }
+                        SuggestionChip(
+                            onClick = {},
+                            label = {
+                                Text(
+                                    config.transport.uppercase(),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            modifier = Modifier.height(24.dp)
+                        )
+                    }
+                }
+
+                // Action buttons
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (isEnabled) {
+                        FilledTonalButton(
+                            onClick = onDisableClick,
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer
+                            )
+                        ) {
+                            Text("Disable")
+                        }
+                        if (config.envVars.isNotEmpty()) {
+                            IconButton(onClick = onConfigureClick, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Settings, "Configure", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    } else {
+                        Button(onClick = onEnableClick) {
+                            Text("Enable")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusDot(status: ExtensionStatus) {
+    val color = when (status) {
+        ExtensionStatus.CONNECTED -> Color(0xFF4CAF50) // Green
+        ExtensionStatus.CONNECTING -> Color(0xFFFFC107) // Amber
+        ExtensionStatus.ERROR -> Color(0xFFF44336) // Red
+        ExtensionStatus.DISCONNECTED -> Color(0xFF9E9E9E) // Grey
+    }
+    val label = when (status) {
+        ExtensionStatus.CONNECTED -> "Connected"
+        ExtensionStatus.CONNECTING -> "Connecting..."
+        ExtensionStatus.ERROR -> "Error"
+        ExtensionStatus.DISCONNECTED -> "Disabled"
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Surface(
+            modifier = Modifier.size(8.dp),
+            shape = MaterialTheme.shapes.small,
+            color = color
+        ) {}
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+// ─── Pre-configured Setup Dialog (for env vars / API keys) ──────────────────
+
+@Composable
+private fun PreconfiguredSetupDialog(
+    config: McpExtensionConfig,
+    existingConfig: McpExtensionConfig?,
+    onDismiss: () -> Unit,
+    onSave: (envVars: Map<String, String>) -> Unit
+) {
+    // Initialize env var fields from existing config or defaults
+    val envVarStates = remember {
+        config.envVars.map { (key, defaultValue) ->
+            val existingValue = existingConfig?.envVars?.get(key) ?: defaultValue
+            key to mutableStateOf(existingValue)
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Configure ${config.name}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    config.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text(
+                    "Command: ${config.command}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (envVarStates.isNotEmpty()) {
+                    Text(
+                        "Environment Variables",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+
+                    for ((key, state) in envVarStates) {
+                        OutlinedTextField(
+                            value = state.value,
+                            onValueChange = { state.value = it },
+                            label = { Text(key) },
+                            placeholder = { Text("Enter value for $key") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val envVars = envVarStates.associate { (key, state) -> key to state.value }
+                    onSave(envVars)
+                },
+                enabled = envVarStates.all { (_, state) -> state.value.isNotBlank() }
+            ) {
+                Text("Enable")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+// ─── Existing cards (unchanged) ─────────────────────────────────────────────
 
 @Composable
 private fun ExtensionCard(
@@ -366,8 +751,6 @@ private fun ExtensionCard(
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
-            // NOTE: Toggle saves to DataStore for UI state only.
-            // Not yet communicated to GooseService until goose serve integration is complete.
             Switch(checked = enabled, onCheckedChange = onToggle)
         }
     }
@@ -430,8 +813,6 @@ private fun McpExtensionCard(
 
 /**
  * Dialog shown when the user taps "Setup" on an MCP extension card.
- * Lets the user enter the server URL (for http) or command (for stdio),
- * environment variables, and arguments, then persists to mcp_extensions.json.
  */
 @Composable
 private fun McpSetupDialog(
