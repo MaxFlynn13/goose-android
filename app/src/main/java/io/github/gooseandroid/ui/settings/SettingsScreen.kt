@@ -650,7 +650,7 @@ fun ConfigureProviderScreen(onBack: () -> Unit, onNavigateToModels: () -> Unit =
                                             )
                                         }
                                         Icon(
-                                            Icons.AutoMirrored.Filled.ArrowForward,
+                                            Icons.Filled.ChevronRight,
                                             contentDescription = null,
                                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
