@@ -2,6 +2,7 @@ package io.github.gooseandroid.ui.chat
 
 import io.github.gooseandroid.data.models.*
 
+import androidx.compose.animation.*
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -12,21 +13,27 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
 import kotlinx.coroutines.delay
@@ -56,6 +63,33 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboardManager = LocalClipboardManager.current
+
+    // Active model label from settings
+    val context = LocalContext.current
+    val settingsStore = remember { SettingsStore(context) }
+    val activeProvider by settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER, "anthropic")
+        .collectAsState(initial = "anthropic")
+    val activeModel by settingsStore.getString(SettingsKeys.ACTIVE_MODEL, "claude-sonnet-4-20250514")
+        .collectAsState(initial = "claude-sonnet-4-20250514")
+
+    val modelLabel = remember(activeProvider, activeModel) {
+        val provider = getProviderById(activeProvider)
+        provider?.models?.find { it.id == activeModel }?.displayName ?: activeModel
+    }
+
+    // Track "Done" state: show briefly after generation completes
+    var showDone by remember { mutableStateOf(false) }
+    var wasGenerating by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isGenerating) {
+        if (wasGenerating && !isGenerating) {
+            // Generation just completed
+            showDone = true
+            delay(2000L)
+            showDone = false
+        }
+        wasGenerating = isGenerating
+    }
 
     // Show errors as snackbar
     LaunchedEffect(lastError) {
@@ -98,21 +132,41 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = currentSessionTitle.ifBlank { "Goose" },
+                        text = currentSessionTitle.ifBlank { "" },
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleMedium
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(Icons.Default.Menu, contentDescription = "Open menu")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(start = 16.dp)
+                    ) {
+                        Text(
+                            text = "Goose",
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = modelLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 },
                 actions = {
                     IconButton(onClick = onNewChat) {
                         Icon(Icons.Default.Add, contentDescription = "New chat")
                     }
-                    ProviderModelChip()
+                    IconButton(onClick = onMenuClick) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open menu")
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -127,12 +181,12 @@ fun ChatScreen(
                 .padding(padding)
         ) {
             when {
-                // Feature 1: Loading skeleton while session is loading
+                // Loading skeleton while session is loading
                 isLoadingSession -> {
                     LoadingSkeleton(modifier = Modifier.weight(1f))
                 }
                 messages.isEmpty() && !isGenerating -> {
-                    // P0: Welcome / empty state
+                    // Welcome / empty state
                     WelcomeScreen(
                         onSuggestionClick = { viewModel.sendMessage(it) },
                         modifier = Modifier.weight(1f)
@@ -188,6 +242,15 @@ fun ChatScreen(
                 }
             }
 
+            // Status indicator bar between messages and input
+            StatusIndicatorBar(
+                isGenerating = isGenerating,
+                streamingContent = streamingContent,
+                toolCalls = toolCalls,
+                showDone = showDone,
+                onCancel = { viewModel.cancelGeneration() }
+            )
+
             // Input bar
             ChatInputBar(
                 onSend = { text ->
@@ -210,6 +273,7 @@ fun ChatScreen(
                 onPrefillConsumed = { viewModel.clearPendingPrompt() },
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
                     .windowInsetsPadding(WindowInsets.ime)
                     .windowInsetsPadding(WindowInsets.navigationBars)
             )
@@ -218,7 +282,131 @@ fun ChatScreen(
 }
 
 // ---------------------------------------------------------------------------
-// Loading Skeleton (Feature 1: P1 #4)
+// Status Indicator Bar
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun StatusIndicatorBar(
+    isGenerating: Boolean,
+    streamingContent: String,
+    toolCalls: List<ToolCall>,
+    showDone: Boolean,
+    onCancel: () -> Unit
+) {
+    val runningTools = toolCalls.filter { it.status == ToolCallStatus.RUNNING }
+
+    val statusText = when {
+        isGenerating && runningTools.isNotEmpty() -> "Running: ${runningTools.first().name}..."
+        isGenerating && streamingContent.isNotBlank() -> "Writing response..."
+        isGenerating && streamingContent.isBlank() -> "Thinking..."
+        showDone -> "Done"
+        else -> null
+    }
+
+    AnimatedVisibility(
+        visible = statusText != null,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut()
+    ) {
+        if (statusText != null) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(32.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                tonalElevation = 0.5.dp
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (showDone) {
+                        // Checkmark icon for "Done" state
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        // Animated pulsing dot
+                        PulsingDot()
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (showDone) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    // Cancel button (only while generating)
+                    if (isGenerating) {
+                        IconButton(
+                            onClick = onCancel,
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Cancel generation",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PulsingDot() {
+    val infiniteTransition = rememberInfiniteTransition(label = "status_pulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 600),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dot_alpha"
+    )
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.8f,
+        targetValue = 1.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 600),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "dot_scale"
+    )
+
+    Box(
+        modifier = Modifier
+            .size(8.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                this.alpha = alpha
+            }
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary)
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Loading Skeleton
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -236,16 +424,15 @@ private fun LoadingSkeleton(modifier: Modifier = Modifier) {
 
     val shimmerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha)
 
-    // Skeleton rows simulating alternating user/assistant messages
     data class SkeletonRow(val widthFraction: Float, val isUser: Boolean)
 
     val rows = listOf(
-        SkeletonRow(0.60f, true),    // user bubble placeholder
-        SkeletonRow(0.90f, false),   // assistant placeholder
-        SkeletonRow(0.75f, false),   // assistant placeholder
-        SkeletonRow(0.50f, true),    // user bubble placeholder
-        SkeletonRow(0.85f, false),   // assistant placeholder
-        SkeletonRow(0.65f, false)    // assistant placeholder
+        SkeletonRow(0.60f, true),
+        SkeletonRow(0.90f, false),
+        SkeletonRow(0.75f, false),
+        SkeletonRow(0.50f, true),
+        SkeletonRow(0.85f, false),
+        SkeletonRow(0.65f, false)
     )
 
     Column(
@@ -279,7 +466,7 @@ private fun LoadingSkeleton(modifier: Modifier = Modifier) {
 }
 
 // ---------------------------------------------------------------------------
-// Welcome / Empty State (P0 #1)
+// Welcome / Empty State
 // ---------------------------------------------------------------------------
 
 @Composable
@@ -340,7 +527,7 @@ private fun WelcomeScreen(
 }
 
 // ---------------------------------------------------------------------------
-// Date Separators (P1 #5)
+// Date Separators
 // ---------------------------------------------------------------------------
 
 private sealed class ChatItem(val key: String) {
@@ -395,58 +582,6 @@ private fun DateSeparatorRow(label: String) {
 }
 
 // ---------------------------------------------------------------------------
-// Provider/Model Chip with dropdown
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun ProviderModelChip() {
-    val context = LocalContext.current
-    val settingsStore = remember { SettingsStore(context) }
-    val scope = rememberCoroutineScope()
-    var expanded by remember { mutableStateOf(false) }
-
-    val activeProvider by settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER, "anthropic")
-        .collectAsState(initial = "anthropic")
-    val activeModel by settingsStore.getString(SettingsKeys.ACTIVE_MODEL, "claude-sonnet-4-20250514")
-        .collectAsState(initial = "claude-sonnet-4-20250514")
-
-    val modelLabel = remember(activeProvider, activeModel) {
-        val provider = getProviderById(activeProvider)
-        provider?.models?.find { it.id == activeModel }?.displayName ?: activeModel
-    }
-
-    Box {
-        SuggestionChip(
-            onClick = { expanded = true },
-            label = { Text(modelLabel, style = MaterialTheme.typography.labelSmall, maxLines = 1) },
-            modifier = Modifier.padding(end = 8.dp)
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            PROVIDER_CATALOG.forEach { provider ->
-                DropdownMenuItem(
-                    text = { Text(provider.displayName, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary) },
-                    onClick = {}, enabled = false
-                )
-                provider.models.forEach { model ->
-                    val isActive = activeProvider == provider.id && activeModel == model.id
-                    DropdownMenuItem(
-                        text = { Text(if (isActive) "  ${model.displayName}  *" else "  ${model.displayName}", style = MaterialTheme.typography.bodySmall) },
-                        onClick = {
-                            scope.launch {
-                                settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, provider.id)
-                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, model.id)
-                            }
-                            expanded = false
-                        }
-                    )
-                }
-                HorizontalDivider()
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Message Item dispatcher
 // ---------------------------------------------------------------------------
 
@@ -468,7 +603,7 @@ private fun MessageItem(
             MessageRole.ASSISTANT -> AssistantBubble(message = message, onDelete = {})
             MessageRole.SYSTEM -> SystemBubble(message = message)
         }
-        // P1 #6: Message timestamp
+        // Message timestamp
         Text(
             text = formatTimestamp(message.timestamp),
             style = MaterialTheme.typography.labelSmall,

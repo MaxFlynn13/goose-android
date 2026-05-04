@@ -27,9 +27,9 @@ import io.github.gooseandroid.ui.runtime.RuntimePacksScreen
 import io.github.gooseandroid.ui.workspace.WorkspaceScreen
 import io.github.gooseandroid.ui.extensions.ExtensionsScreen
 import io.github.gooseandroid.ui.history.HistoryScreen
-import io.github.gooseandroid.ui.models.ModelsScreen
 import io.github.gooseandroid.ui.panel.SidePanel
 import io.github.gooseandroid.ui.projects.ProjectsScreen
+import io.github.gooseandroid.ui.settings.ConfigureProviderScreen
 import io.github.gooseandroid.ui.settings.SettingsScreen
 import io.github.gooseandroid.ui.skills.SkillsScreen
 
@@ -125,16 +125,22 @@ fun GooseNavigation(sharedText: String? = null) {
             }
             composable("brain") { BrainScreen(onBack = { navController.popBackStack() }) }
             composable("extensions") { ExtensionsScreen(onBack = { navController.popBackStack() }) }
-            composable("models") { ModelsScreen(onBack = { navController.popBackStack() }) }
+            composable("workspace") { WorkspaceScreen(onBack = { navController.popBackStack() }) }
+
+            // Settings and its sub-screens
             composable("settings") {
                 SettingsScreen(
                     onBack = { navController.popBackStack() },
-                    onNavigateToModels = { navController.navigate("models") },
-                    onNavigateToExtensions = { navController.navigate("extensions") }
+                    onNavigateToExtensions = { navController.navigate("extensions") },
+                    onNavigateToRuntimes = { navController.navigate("runtimes") },
+                    onNavigateToLogs = { navController.navigate("logs") },
+                    onNavigateToDoctor = { navController.navigate("doctor") },
+                    onNavigateToConfigureProvider = { navController.navigate("configure_provider") }
                 )
             }
-            composable("doctor") { DoctorScreen(onBack = { navController.popBackStack() }) }
-            composable("logs") { LogViewerScreen(onBack = { navController.popBackStack() }) }
+            composable("configure_provider") {
+                ConfigureProviderScreen(onBack = { navController.popBackStack() })
+            }
             composable("runtimes") {
                 val packManager = remember { io.github.gooseandroid.runtime.RuntimePackManager(navController.context) }
                 RuntimePacksScreen(
@@ -142,7 +148,8 @@ fun GooseNavigation(sharedText: String? = null) {
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
-            composable("workspace") { WorkspaceScreen(onBack = { navController.popBackStack() }) }
+            composable("logs") { LogViewerScreen(onBack = { navController.popBackStack() }) }
+            composable("doctor") { DoctorScreen(onBack = { navController.popBackStack() }) }
         }
 
         // Scrim
@@ -158,7 +165,7 @@ fun GooseNavigation(sharedText: String? = null) {
             )
         }
 
-        // Side panel — always left side, no tab button
+        // Side panel — always slides from the LEFT side
         SidePanel(
             isOpen = panelOpen,
             onToggle = { panelOpen = !panelOpen },

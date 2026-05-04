@@ -194,7 +194,7 @@ fun ChatInputBar(
 
     Surface(
         modifier = modifier,
-        tonalElevation = 2.dp,
+        tonalElevation = 0.dp,
         color = MaterialTheme.colorScheme.surface
     ) {
         Column(

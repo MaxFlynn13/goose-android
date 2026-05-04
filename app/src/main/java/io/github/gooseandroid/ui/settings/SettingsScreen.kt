@@ -3,10 +3,13 @@ package io.github.gooseandroid.ui.settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -14,64 +17,44 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.graphics.toArgb
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
+import io.github.gooseandroid.data.models.ModelOption
 import io.github.gooseandroid.data.models.PROVIDER_CATALOG
 import io.github.gooseandroid.data.models.ProviderInfo
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 
-// --- Main Settings Screen ---
+// ==================== Main Settings Screen ====================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onNavigateToModels: () -> Unit,
-
-    onNavigateToExtensions: () -> Unit = {}
+    onNavigateToExtensions: () -> Unit = {},
+    onNavigateToRuntimes: () -> Unit = {},
+    onNavigateToLogs: () -> Unit = {},
+    onNavigateToDoctor: () -> Unit = {},
+    onNavigateToConfigureProvider: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val settingsStore = remember { SettingsStore(context) }
     val scope = rememberCoroutineScope()
 
-    // Active provider and model
+    // Active provider and model for display
     val activeProvider by settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER, "anthropic")
         .collectAsState(initial = "anthropic")
     val activeModel by settingsStore.getString(SettingsKeys.ACTIVE_MODEL, "claude-sonnet-4-20250514")
         .collectAsState(initial = "claude-sonnet-4-20250514")
-
-    // API keys
-    val anthropicKey by settingsStore.getString(SettingsKeys.ANTHROPIC_API_KEY)
-        .collectAsState(initial = "")
-    val openaiKey by settingsStore.getString(SettingsKeys.OPENAI_API_KEY)
-        .collectAsState(initial = "")
-    val googleKey by settingsStore.getString(SettingsKeys.GOOGLE_API_KEY)
-        .collectAsState(initial = "")
-    val mistralKey by settingsStore.getString(SettingsKeys.MISTRAL_API_KEY)
-        .collectAsState(initial = "")
-    val openrouterKey by settingsStore.getString(SettingsKeys.OPENROUTER_API_KEY)
-        .collectAsState(initial = "")
-
-    // Ollama
-    val ollamaBaseUrl by settingsStore.getString(SettingsKeys.OLLAMA_BASE_URL, "http://localhost:11434")
-        .collectAsState(initial = "http://localhost:11434")
-
-    // Custom provider
-    val customUrl by settingsStore.getString(SettingsKeys.CUSTOM_PROVIDER_URL)
-        .collectAsState(initial = "")
-    val customKey by settingsStore.getString(SettingsKeys.CUSTOM_PROVIDER_KEY)
-        .collectAsState(initial = "")
-    val customModel by settingsStore.getString(SettingsKeys.CUSTOM_PROVIDER_MODEL)
-        .collectAsState(initial = "")
 
     // Compaction
     val autoCompact by settingsStore.getBoolean(SettingsKeys.AUTO_COMPACT, false)
@@ -83,45 +66,16 @@ fun SettingsScreen(
     val shellPath by settingsStore.getString(SettingsKeys.SHELL_PATH, "/system/bin/sh")
         .collectAsState(initial = "/system/bin/sh")
 
-    // Track which provider card is expanded
-    var expandedProviderId by remember { mutableStateOf<String?>(null) }
+    // Theme
     var themeMode by remember { mutableStateOf("SYSTEM") }
     LaunchedEffect(Unit) {
         settingsStore.getString(SettingsKeys.THEME_MODE, "SYSTEM").collect { themeMode = it }
     }
 
-    // Helper to get the stored key for a provider — uses PROVIDER_CATALOG
-    fun getKeyForProvider(providerId: String): String {
-        val providerInfo = PROVIDER_CATALOG.find { it.id == providerId } ?: return ""
-        val settingsKey = providerInfo.apiKeySettingsKey
-        if (settingsKey.isBlank()) return ""
-        return when (providerId) {
-            "anthropic" -> anthropicKey
-            "openai" -> openaiKey
-            "google" -> googleKey
-            "mistral" -> mistralKey
-            "openrouter" -> openrouterKey
-            "custom" -> customKey
-            else -> ""
-        }
-    }
-
-    // Uses PROVIDER_CATALOG apiKeySettingsKey to check configuration
-    fun isProviderConfigured(providerId: String): Boolean {
-        val providerInfo = PROVIDER_CATALOG.find { it.id == providerId } ?: return false
-        return when {
-            providerInfo.id == "ollama" -> ollamaBaseUrl.isNotBlank()
-            providerInfo.id == "custom" -> customUrl.isNotBlank() && customModel.isNotBlank()
-            providerInfo.requiresApiKey -> getKeyForProvider(providerId).isNotBlank()
-            else -> true
-        }
-    }
-
-    // Uses PROVIDER_CATALOG apiKeySettingsKey
-    fun settingsKeyForProvider(providerId: String): String {
-        val providerInfo = PROVIDER_CATALOG.find { it.id == providerId } ?: return ""
-        return providerInfo.apiKeySettingsKey
-    }
+    // Resolve display names
+    val providerDisplay = PROVIDER_CATALOG.find { it.id == activeProvider }?.displayName ?: activeProvider
+    val modelDisplay = PROVIDER_CATALOG.find { it.id == activeProvider }
+        ?.models?.find { it.id == activeModel }?.displayName ?: activeModel
 
     Scaffold(
         topBar = {
@@ -140,152 +94,108 @@ fun SettingsScreen(
                 .fillMaxSize()
                 .padding(padding),
             contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // ==================== PROVIDERS SECTION ====================
+            // ==================== CONFIGURE PROVIDER ====================
             item {
-                SectionHeader(title = "Providers", icon = Icons.Filled.Cloud)
-            }
-
-            items(PROVIDER_CATALOG, key = { it.id }) { provider ->
-                ProviderCard(
-                    provider = provider,
-                    isActive = activeProvider == provider.id,
-                    isConfigured = isProviderConfigured(provider.id),
-                    isExpanded = expandedProviderId == provider.id,
-                    apiKey = getKeyForProvider(provider.id),
-                    baseUrl = when (provider.id) {
-                        "ollama" -> ollamaBaseUrl
-                        "custom" -> customUrl
-                        else -> ""
-                    },
-                    modelName = if (provider.id == "custom") customModel else "",
-                    onToggleExpand = {
-                        expandedProviderId = if (expandedProviderId == provider.id) null else provider.id
-                    },
-                    onSelectActive = {
-                        scope.launch {
-                            settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, provider.id)
-                            // Set default model from PROVIDER_CATALOG
-                            if (provider.models.isNotEmpty()) {
-                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, provider.models.first().id)
-                            }
-                        }
-                    },
-                    settingsKey = settingsKeyForProvider(provider.id),
-                    settingsStore = settingsStore,
-                    onBaseUrlChange = { newUrl ->
-                        scope.launch {
-                            when (provider.id) {
-                                "ollama" -> settingsStore.setString(SettingsKeys.OLLAMA_BASE_URL, newUrl)
-                                "custom" -> settingsStore.setString(SettingsKeys.CUSTOM_PROVIDER_URL, newUrl)
-                            }
-                        }
-                    },
-                    onModelNameChange = { newModel ->
-                        scope.launch {
-                            settingsStore.setString(SettingsKeys.CUSTOM_PROVIDER_MODEL, newModel)
-                        }
-                    }
+                NavigationCard(
+                    title = "Configure Provider",
+                    subtitle = "$providerDisplay · $modelDisplay",
+                    icon = Icons.Filled.Cloud,
+                    onClick = onNavigateToConfigureProvider
                 )
             }
 
-            // ==================== MODEL SELECTION SECTION ====================
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                SectionHeader(title = "Model", icon = Icons.Filled.Memory)
-            }
-
-            item {
-                ModelSelectionCard(
-                    activeProvider = activeProvider,
-                    activeModel = activeModel,
-                    customModel = customModel,
-                    onModelSelected = { model ->
-                        scope.launch {
-                            settingsStore.setString(SettingsKeys.ACTIVE_MODEL, model)
-                        }
-                    }
-                )
-            }
-
-            // ==================== CODEX OAUTH ====================
-            item {
-                var showCodexDialog by remember { mutableStateOf(false) }
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showCodexDialog = true }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(Icons.Filled.Login, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Sign in with Codex", style = MaterialTheme.typography.titleSmall)
-                            Text("GitHub Copilot / Codex OAuth device flow", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                if (showCodexDialog) {
-                    io.github.gooseandroid.ui.providers.OAuthDeviceFlowDialog(
-                        providerName = "GitHub Codex",
-                        deviceAuthUrl = "https://github.com/login/device/code",
-                        tokenUrl = "https://github.com/login/oauth/access_token",
-                        clientId = "Iv1.b507a08c87ecfe98",
-                        scope = "read:user",
-                        onTokenReceived = { token ->
-                            scope.launch {
-                                settingsStore.setString("codex_oauth_token", token)
-                            }
-                            showCodexDialog = false
-                        },
-                        onDismiss = { showCodexDialog = false }
-                    )
-                }
-            }
-
-            // ==================== EXTENSIONS SECTION ====================
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                SectionHeader(title = "Extensions", icon = Icons.Filled.Extension)
-            }
+            // ==================== EXTENSIONS & RUNTIMES ====================
+            item { SettingsDivider() }
 
             item {
                 NavigationCard(
-                    title = "Manage Extensions",
+                    title = "Extensions",
                     subtitle = "Configure built-in and custom extensions",
                     icon = Icons.Filled.Extension,
                     onClick = onNavigateToExtensions
                 )
             }
 
-            // ==================== LOCAL MODELS SECTION ====================
             item {
-                Spacer(modifier = Modifier.height(8.dp))
-                SectionHeader(title = "Local Models", icon = Icons.Filled.PhoneAndroid)
+                NavigationCard(
+                    title = "Runtime Packs",
+                    subtitle = "Manage language runtimes and toolchains",
+                    icon = Icons.Filled.Build,
+                    onClick = onNavigateToRuntimes
+                )
+            }
+
+            // ==================== APPEARANCE ====================
+            item { SettingsDivider() }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Theme", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = themeMode == "SYSTEM",
+                                onClick = {
+                                    scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "SYSTEM") }
+                                    themeMode = "SYSTEM"
+                                },
+                                label = { Text("System") }
+                            )
+                            FilterChip(
+                                selected = themeMode == "DARK",
+                                onClick = {
+                                    scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "DARK") }
+                                    themeMode = "DARK"
+                                },
+                                label = { Text("Dark") }
+                            )
+                            FilterChip(
+                                selected = themeMode == "LIGHT",
+                                onClick = {
+                                    scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "LIGHT") }
+                                    themeMode = "LIGHT"
+                                },
+                                label = { Text("Light") }
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Accent Color", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        AccentColorRow(settingsStore = settingsStore, scope = scope)
+                    }
+                }
+            }
+
+            // ==================== DIAGNOSTICS & LOGS ====================
+            item { SettingsDivider() }
+
+            item {
+                NavigationCard(
+                    title = "Diagnostics",
+                    subtitle = "Run health checks and view system status",
+                    icon = Icons.Filled.HealthAndSafety,
+                    onClick = onNavigateToDoctor
+                )
             }
 
             item {
                 NavigationCard(
-                    title = "Manage Local Models",
-                    subtitle = "Download and manage on-device models",
-                    icon = Icons.Filled.Download,
-                    onClick = onNavigateToModels
+                    title = "Logs",
+                    subtitle = "View application and session logs",
+                    icon = Icons.Filled.Terminal,
+                    onClick = onNavigateToLogs
                 )
             }
 
-            // ==================== COMPACTION SECTION ====================
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                SectionHeader(title = "Compaction", icon = Icons.Filled.Compress)
-            }
+            // ==================== COMPACTION ====================
+            item { SettingsDivider() }
 
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Card(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -299,7 +209,7 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                text = "Automatically summarize long conversations to reduce token usage",
+                                text = "Summarize long conversations to reduce token usage",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -316,23 +226,15 @@ fun SettingsScreen(
                 }
             }
 
-            // ==================== GENERAL SECTION ====================
+            // ==================== GENERAL ====================
             item {
-                Spacer(modifier = Modifier.height(8.dp))
-                SectionHeader(title = "General", icon = Icons.Filled.Settings)
-            }
-
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // Working directory
                         Column {
                             Text(
                                 text = "Working Directory",
@@ -344,10 +246,7 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
-
                         HorizontalDivider()
-
-                        // Shell path
                         Column {
                             Text(
                                 text = "Shell Path",
@@ -363,53 +262,11 @@ fun SettingsScreen(
                 }
             }
 
-            // ==================== APPEARANCE SECTION ====================
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                SectionHeader(title = "Appearance", icon = Icons.Filled.Palette)
-            }
+            // ==================== ABOUT ====================
+            item { SettingsDivider() }
 
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Theme", style = MaterialTheme.typography.titleSmall)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = themeMode == "SYSTEM",
-                                onClick = { scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "SYSTEM") }; themeMode = "SYSTEM" },
-                                label = { Text("System") }
-                            )
-                            FilterChip(
-                                selected = themeMode == "DARK",
-                                onClick = { scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "DARK") }; themeMode = "DARK" },
-                                label = { Text("Dark") }
-                            )
-                            FilterChip(
-                                selected = themeMode == "LIGHT",
-                                onClick = { scope.launch { settingsStore.setString(SettingsKeys.THEME_MODE, "LIGHT") }; themeMode = "LIGHT" },
-                                label = { Text("Light") }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("Accent Color", style = MaterialTheme.typography.titleSmall)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        AccentColorRow(settingsStore = settingsStore, scope = scope)
-                    }
-                }
-            }
-
-            // ==================== ABOUT SECTION ====================
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                SectionHeader(title = "About", icon = Icons.Filled.Info)
-            }
-
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -492,10 +349,330 @@ fun SettingsScreen(
     }
 }
 
-// --- Section Header ---
+// ==================== Configure Provider Screen ====================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ConfigureProviderScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val settingsStore = remember { SettingsStore(context) }
+    val scope = rememberCoroutineScope()
+
+    val pagerState = rememberPagerState(pageCount = { 2 })
+
+    // Active provider and model
+    val activeProvider by settingsStore.getString(SettingsKeys.ACTIVE_PROVIDER, "anthropic")
+        .collectAsState(initial = "anthropic")
+    val activeModel by settingsStore.getString(SettingsKeys.ACTIVE_MODEL, "claude-sonnet-4-20250514")
+        .collectAsState(initial = "claude-sonnet-4-20250514")
+
+    // API keys
+    val anthropicKey by settingsStore.getString(SettingsKeys.ANTHROPIC_API_KEY)
+        .collectAsState(initial = "")
+    val openaiKey by settingsStore.getString(SettingsKeys.OPENAI_API_KEY)
+        .collectAsState(initial = "")
+    val googleKey by settingsStore.getString(SettingsKeys.GOOGLE_API_KEY)
+        .collectAsState(initial = "")
+    val mistralKey by settingsStore.getString(SettingsKeys.MISTRAL_API_KEY)
+        .collectAsState(initial = "")
+    val openrouterKey by settingsStore.getString(SettingsKeys.OPENROUTER_API_KEY)
+        .collectAsState(initial = "")
+
+    // Ollama
+    val ollamaBaseUrl by settingsStore.getString(SettingsKeys.OLLAMA_BASE_URL, "http://localhost:11434")
+        .collectAsState(initial = "http://localhost:11434")
+
+    // Custom provider
+    val customUrl by settingsStore.getString(SettingsKeys.CUSTOM_PROVIDER_URL)
+        .collectAsState(initial = "")
+    val customKey by settingsStore.getString(SettingsKeys.CUSTOM_PROVIDER_KEY)
+        .collectAsState(initial = "")
+    val customModel by settingsStore.getString(SettingsKeys.CUSTOM_PROVIDER_MODEL)
+        .collectAsState(initial = "")
+
+    // Track which provider card is expanded
+    var expandedProviderId by remember { mutableStateOf<String?>(null) }
+
+    // Split catalog into cloud and local
+    val cloudProviders = PROVIDER_CATALOG.filter { it.id != "ollama" }
+    val localProviders = PROVIDER_CATALOG.filter { it.id == "ollama" }
+
+    fun getKeyForProvider(providerId: String): String {
+        return when (providerId) {
+            "anthropic" -> anthropicKey
+            "openai" -> openaiKey
+            "google" -> googleKey
+            "mistral" -> mistralKey
+            "openrouter" -> openrouterKey
+            "custom" -> customKey
+            else -> ""
+        }
+    }
+
+    fun isProviderConfigured(providerId: String): Boolean {
+        val providerInfo = PROVIDER_CATALOG.find { it.id == providerId } ?: return false
+        return when {
+            providerInfo.id == "ollama" -> ollamaBaseUrl.isNotBlank()
+            providerInfo.id == "custom" -> customUrl.isNotBlank() && customModel.isNotBlank()
+            providerInfo.requiresApiKey -> getKeyForProvider(providerId).isNotBlank()
+            else -> true
+        }
+    }
+
+    fun settingsKeyForProvider(providerId: String): String {
+        val providerInfo = PROVIDER_CATALOG.find { it.id == providerId } ?: return ""
+        return providerInfo.apiKeySettingsKey
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Configure Provider") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            // Tab row
+            TabRow(
+                selectedTabIndex = pagerState.currentPage
+            ) {
+                Tab(
+                    selected = pagerState.currentPage == 0,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                    text = { Text("Cloud API") },
+                    icon = { Icon(Icons.Filled.Cloud, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                )
+                Tab(
+                    selected = pagerState.currentPage == 1,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                    text = { Text("Local Models") },
+                    icon = { Icon(Icons.Filled.PhoneAndroid, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                )
+            }
+
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize()
+            ) { page ->
+                when (page) {
+                    0 -> {
+                        // Cloud API tab
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            // Model selection at the top
+                            item {
+                                ModelSelectionCard(
+                                    activeProvider = activeProvider,
+                                    activeModel = activeModel,
+                                    customModel = customModel,
+                                    onModelSelected = { model ->
+                                        scope.launch {
+                                            settingsStore.setString(SettingsKeys.ACTIVE_MODEL, model)
+                                        }
+                                    }
+                                )
+                            }
+
+                            item {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                SectionHeader(title = "Providers", icon = Icons.Filled.Cloud)
+                            }
+
+                            items(cloudProviders, key = { it.id }) { provider ->
+                                ProviderCard(
+                                    provider = provider,
+                                    isActive = activeProvider == provider.id,
+                                    isConfigured = isProviderConfigured(provider.id),
+                                    isExpanded = expandedProviderId == provider.id,
+                                    apiKey = getKeyForProvider(provider.id),
+                                    baseUrl = when (provider.id) {
+                                        "custom" -> customUrl
+                                        else -> ""
+                                    },
+                                    modelName = if (provider.id == "custom") customModel else "",
+                                    onToggleExpand = {
+                                        expandedProviderId = if (expandedProviderId == provider.id) null else provider.id
+                                    },
+                                    onSelectActive = {
+                                        scope.launch {
+                                            settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, provider.id)
+                                            if (provider.models.isNotEmpty()) {
+                                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, provider.models.first().id)
+                                            }
+                                        }
+                                    },
+                                    settingsKey = settingsKeyForProvider(provider.id),
+                                    settingsStore = settingsStore,
+                                    onBaseUrlChange = { newUrl ->
+                                        scope.launch {
+                                            when (provider.id) {
+                                                "custom" -> settingsStore.setString(SettingsKeys.CUSTOM_PROVIDER_URL, newUrl)
+                                            }
+                                        }
+                                    },
+                                    onModelNameChange = { newModel ->
+                                        scope.launch {
+                                            settingsStore.setString(SettingsKeys.CUSTOM_PROVIDER_MODEL, newModel)
+                                        }
+                                    }
+                                )
+                            }
+
+                            // Codex OAuth
+                            item {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                CodexOAuthCard(settingsStore = settingsStore, scope = scope)
+                            }
+
+                            item { Spacer(modifier = Modifier.height(32.dp)) }
+                        }
+                    }
+                    1 -> {
+                        // Local Models tab
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            item {
+                                SectionHeader(title = "Ollama", icon = Icons.Filled.PhoneAndroid)
+                            }
+
+                            items(localProviders, key = { it.id }) { provider ->
+                                ProviderCard(
+                                    provider = provider,
+                                    isActive = activeProvider == provider.id,
+                                    isConfigured = isProviderConfigured(provider.id),
+                                    isExpanded = expandedProviderId == provider.id,
+                                    apiKey = "",
+                                    baseUrl = ollamaBaseUrl,
+                                    modelName = "",
+                                    onToggleExpand = {
+                                        expandedProviderId = if (expandedProviderId == provider.id) null else provider.id
+                                    },
+                                    onSelectActive = {
+                                        scope.launch {
+                                            settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, provider.id)
+                                            if (provider.models.isNotEmpty()) {
+                                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, provider.models.first().id)
+                                            }
+                                        }
+                                    },
+                                    settingsKey = "",
+                                    settingsStore = settingsStore,
+                                    onBaseUrlChange = { newUrl ->
+                                        scope.launch {
+                                            settingsStore.setString(SettingsKeys.OLLAMA_BASE_URL, newUrl)
+                                        }
+                                    },
+                                    onModelNameChange = {}
+                                )
+                            }
+
+                            // Model selection for local
+                            item {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                SectionHeader(title = "Model Selection", icon = Icons.Filled.Memory)
+                            }
+
+                            item {
+                                if (activeProvider == "ollama") {
+                                    ModelSelectionCard(
+                                        activeProvider = activeProvider,
+                                        activeModel = activeModel,
+                                        customModel = customModel,
+                                        onModelSelected = { model ->
+                                            scope.launch {
+                                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, model)
+                                            }
+                                        }
+                                    )
+                                } else {
+                                    Card(modifier = Modifier.fillMaxWidth()) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(16.dp)
+                                        ) {
+                                            Text(
+                                                text = "Select Ollama as your active provider to manage local models.",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            item {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Card(modifier = Modifier.fillMaxWidth()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Info,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                            Text(
+                                                text = "About Local Models",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                        Text(
+                                            text = "Local models run on your device via Ollama. " +
+                                                    "Make sure Ollama is running and accessible at the configured base URL. " +
+                                                    "Models must be pulled via the Ollama CLI before they appear here.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            item { Spacer(modifier = Modifier.height(32.dp)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==================== Shared Components ====================
 
 @Composable
-private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+private fun SettingsDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(vertical = 4.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+    )
+}
+
+@Composable
+private fun SectionHeader(title: String, icon: ImageVector) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -516,7 +693,56 @@ private fun SectionHeader(title: String, icon: androidx.compose.ui.graphics.vect
     }
 }
 
-// --- Provider Card (now uses ProviderInfo from ChatModels.kt) ---
+@Composable
+private fun NavigationCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Icon(
+                Icons.Filled.ChevronRight,
+                contentDescription = "Navigate",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// ==================== Provider Card ====================
 
 @OptIn(FlowPreview::class)
 @Composable
@@ -551,7 +777,7 @@ private fun ProviderCard(
         } else null
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Header row - always visible
+            // Header row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -559,7 +785,6 @@ private fun ProviderCard(
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Radio button for active selection
                 RadioButton(
                     selected = isActive,
                     onClick = onSelectActive
@@ -567,7 +792,6 @@ private fun ProviderCard(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // Provider info
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = provider.displayName,
@@ -583,7 +807,6 @@ private fun ProviderCard(
 
                 Spacer(modifier = Modifier.width(8.dp))
 
-                // Status indicator
                 if (isConfigured) {
                     Icon(
                         Icons.Filled.CheckCircle,
@@ -602,7 +825,6 @@ private fun ProviderCard(
 
                 Spacer(modifier = Modifier.width(4.dp))
 
-                // Expand/collapse icon
                 Icon(
                     if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = if (isExpanded) "Collapse" else "Expand",
@@ -624,7 +846,7 @@ private fun ProviderCard(
                 ) {
                     HorizontalDivider()
 
-                    // Base URL field (for providers that require it)
+                    // Base URL field
                     if (provider.requiresBaseUrl) {
                         var urlValue by remember(baseUrl) { mutableStateOf(baseUrl) }
                         OutlinedTextField(
@@ -644,13 +866,11 @@ private fun ProviderCard(
                         )
                     }
 
-                    // API key field — debounced: saves 500ms after last keystroke
+                    // API key field — debounced save
                     if (provider.requiresApiKey) {
                         var keyValue by remember(apiKey) { mutableStateOf(apiKey) }
                         var keyVisible by remember { mutableStateOf(false) }
 
-                        // Debounce the API key save: only persist 500ms after the user
-                        // stops typing, avoiding 40 writes for a 40-char key.
                         LaunchedEffect(Unit) {
                             snapshotFlow { keyValue }
                                 .debounce(500L)
@@ -661,9 +881,7 @@ private fun ProviderCard(
 
                         OutlinedTextField(
                             value = keyValue,
-                            onValueChange = { newVal ->
-                                keyValue = newVal
-                            },
+                            onValueChange = { newVal -> keyValue = newVal },
                             label = { Text("API Key") },
                             placeholder = { Text("Enter your API key") },
                             singleLine = true,
@@ -685,7 +903,7 @@ private fun ProviderCard(
                         )
                     }
 
-                    // Model name field (for Custom provider)
+                    // Model name field (Custom provider)
                     if (provider.requiresModelName) {
                         var modelValue by remember(modelName) { mutableStateOf(modelName) }
                         OutlinedTextField(
@@ -717,7 +935,7 @@ private fun ProviderCard(
     }
 }
 
-// --- Model Selection Card (now uses PROVIDER_CATALOG) ---
+// ==================== Model Selection Card ====================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -731,7 +949,6 @@ private fun ModelSelectionCard(
     val availableModels: List<String> = when {
         provider == null -> emptyList()
         provider.id == "custom" -> if (customModel.isNotBlank()) listOf(customModel) else emptyList()
-        provider.id == "ollama" -> provider.models.map { it.id }
         else -> provider.models.map { it.id }
     }
 
@@ -751,8 +968,8 @@ private fun ModelSelectionCard(
             if (availableModels.isEmpty()) {
                 Text(
                     text = when (activeProvider) {
-                        "ollama" -> "Models are managed via the Ollama server. Use the Local Models screen to configure."
-                        "custom" -> "Enter a model name in the Custom provider configuration above."
+                        "ollama" -> "Models are managed via the Ollama server."
+                        "custom" -> "Enter a model name in the Custom provider configuration."
                         else -> "No models available for this provider."
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -760,8 +977,6 @@ private fun ModelSelectionCard(
                 )
             } else {
                 var expanded by remember { mutableStateOf(false) }
-
-                // Find display name for the active model
                 val activeModelDisplay = provider?.models?.find { it.id == activeModel }?.displayName ?: activeModel
 
                 ExposedDropdownMenuBox(
@@ -829,69 +1044,71 @@ private fun ModelSelectionCard(
     }
 }
 
-// --- Navigation Card ---
+// ==================== Codex OAuth Card ====================
 
 @Composable
-private fun NavigationCard(
-    title: String,
-    subtitle: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit
+private fun CodexOAuthCard(
+    settingsStore: SettingsStore,
+    scope: kotlinx.coroutines.CoroutineScope
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-    ) {
+    var showCodexDialog by remember { mutableStateOf(false) }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable { showCodexDialog = true }
                 .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
-            )
-
-            Spacer(modifier = Modifier.width(16.dp))
-
+            Icon(Icons.Filled.Login, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Column(modifier = Modifier.weight(1f)) {
+                Text("Sign in with Codex", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = subtitle,
+                    "GitHub Copilot / Codex OAuth device flow",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
             Icon(
                 Icons.Filled.ChevronRight,
-                contentDescription = "Navigate",
+                contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
+
+    if (showCodexDialog) {
+        io.github.gooseandroid.ui.providers.OAuthDeviceFlowDialog(
+            providerName = "GitHub Codex",
+            deviceAuthUrl = "https://github.com/login/device/code",
+            tokenUrl = "https://github.com/login/oauth/access_token",
+            clientId = "Iv1.b507a08c87ecfe98",
+            scope = "read:user",
+            onTokenReceived = { token ->
+                scope.launch {
+                    settingsStore.setString("codex_oauth_token", token)
+                }
+                showCodexDialog = false
+            },
+            onDismiss = { showCodexDialog = false }
+        )
+    }
 }
 
-// ==================== ACCENT COLOR PICKER ====================
+// ==================== Accent Color Picker ====================
 
-private data class AccentSwatch(val name: String, val color: androidx.compose.ui.graphics.Color)
+private data class AccentSwatch(val name: String, val color: Color)
 
 private val ACCENT_SWATCHES = listOf(
-    AccentSwatch("Orange", androidx.compose.ui.graphics.Color(0xFFFF6B35)),
-    AccentSwatch("White", androidx.compose.ui.graphics.Color(0xFFE0E0E0)),
-    AccentSwatch("Grey", androidx.compose.ui.graphics.Color(0xFF9E9E9E)),
-    AccentSwatch("Black", androidx.compose.ui.graphics.Color(0xFF424242)),
-    AccentSwatch("Blue", androidx.compose.ui.graphics.Color(0xFF2196F3)),
-    AccentSwatch("Green", androidx.compose.ui.graphics.Color(0xFF00D632)),
-    AccentSwatch("Purple", androidx.compose.ui.graphics.Color(0xFF9C27B0)),
+    AccentSwatch("Orange", Color(0xFFFF6B35)),
+    AccentSwatch("White", Color(0xFFE0E0E0)),
+    AccentSwatch("Grey", Color(0xFF9E9E9E)),
+    AccentSwatch("Black", Color(0xFF424242)),
+    AccentSwatch("Blue", Color(0xFF2196F3)),
+    AccentSwatch("Green", Color(0xFF00D632)),
+    AccentSwatch("Purple", Color(0xFF9C27B0)),
 )
 
 @Composable
@@ -899,7 +1116,7 @@ private fun AccentColorRow(
     settingsStore: SettingsStore,
     scope: kotlinx.coroutines.CoroutineScope
 ) {
-    val defaultOrange = androidx.compose.ui.graphics.Color(0xFFFF6B35).toArgb()
+    val defaultOrange = Color(0xFFFF6B35).toArgb()
     val currentAccent by settingsStore.getInt(
         SettingsKeys.PRIMARY_COLOR, defaultOrange
     ).collectAsState(initial = defaultOrange)
@@ -911,7 +1128,7 @@ private fun AccentColorRow(
         ACCENT_SWATCHES.forEach { swatch ->
             val swatchArgb = swatch.color.toArgb()
             val isSelected = currentAccent == swatchArgb
-            androidx.compose.foundation.Canvas(
+            Canvas(
                 modifier = Modifier
                     .size(if (isSelected) 36.dp else 30.dp)
                     .clickable {
@@ -923,7 +1140,7 @@ private fun AccentColorRow(
                 drawCircle(color = swatch.color)
                 if (isSelected) {
                     drawCircle(
-                        color = androidx.compose.ui.graphics.Color.White,
+                        color = Color.White,
                         radius = size.minDimension / 5f
                     )
                 }
