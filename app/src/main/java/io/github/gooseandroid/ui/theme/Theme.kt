@@ -7,7 +7,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.Density
 import androidx.core.view.WindowCompat
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
@@ -89,5 +91,16 @@ fun GooseTheme(content: @Composable () -> Unit) {
         }
     }
 
-    MaterialTheme(colorScheme = colorScheme, content = content)
+    // Apply text scaling from user preference
+    val textScale by settingsStore.getFloat(SettingsKeys.TEXT_SCALE, 1.0f)
+        .collectAsState(initial = 1.0f)
+    val currentDensity = LocalDensity.current
+    val scaledDensity = Density(
+        density = currentDensity.density,
+        fontScale = currentDensity.fontScale * textScale
+    )
+
+    CompositionLocalProvider(LocalDensity provides scaledDensity) {
+        MaterialTheme(colorScheme = colorScheme, content = content)
+    }
 }

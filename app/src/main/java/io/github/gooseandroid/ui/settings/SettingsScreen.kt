@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.dp
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
 import io.github.gooseandroid.data.models.ModelOption
+import androidx.compose.material3.Slider
+import androidx.compose.ui.unit.sp
 import io.github.gooseandroid.data.models.PROVIDER_CATALOG
 import io.github.gooseandroid.data.models.ProviderInfo
 import kotlinx.coroutines.FlowPreview
@@ -166,6 +168,11 @@ fun SettingsScreen(
                         Text("Accent Color", style = MaterialTheme.typography.titleSmall)
                         Spacer(modifier = Modifier.height(8.dp))
                         AccentColorRow(settingsStore = settingsStore, scope = scope)
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Text Size", style = MaterialTheme.typography.titleSmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        FontScaleSlider(settingsStore = settingsStore, scope = scope)
                     }
                 }
             }
@@ -1188,5 +1195,48 @@ private fun AccentColorRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun FontScaleSlider(
+    settingsStore: SettingsStore,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
+    val textScale by settingsStore.getFloat(SettingsKeys.TEXT_SCALE, 1.0f)
+        .collectAsState(initial = 1.0f)
+    var sliderValue by remember(textScale) { mutableStateOf(textScale) }
+
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("A", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "${(sliderValue * 100).toInt()}%",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text("A", style = MaterialTheme.typography.headlineSmall)
+        }
+        Slider(
+            value = sliderValue,
+            onValueChange = { sliderValue = it },
+            onValueChangeFinished = {
+                scope.launch {
+                    settingsStore.setFloat(SettingsKeys.TEXT_SCALE, sliderValue)
+                }
+            },
+            valueRange = 0.8f..1.5f,
+            steps = 6
+        )
+        Text(
+            "Preview: The quick brown fox jumps over the lazy dog.",
+            style = MaterialTheme.typography.bodyMedium,
+            fontSize = (14 * sliderValue).sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
