@@ -300,31 +300,33 @@ The working directory is the user's project workspace.
                     contextTracker?.let { trackToolExecution(it, toolCall, result.output, result.isError) }
                 }
             } else {
-                // Multiple tool calls — execute in parallel
-                val results = turnToolCalls.map { toolCall ->
-                    async(currentCoroutineContext()) {
-                        // Permission check
-                        val allowed = permissionManager?.checkPermission(toolCall.name, toolCall.input) ?: true
-                        if (!allowed) {
-                            Triple(toolCall, "Operation denied by user.", true)
-                        } else {
-                            val result = executeTool(toolCall)
-                            Triple(toolCall, result.output, result.isError)
+                // Multiple tool calls — execute in parallel using coroutineScope
+                data class ToolResult(val toolCall: LlmToolCall, val output: String, val isError: Boolean)
+
+                val parallelResults = kotlinx.coroutines.coroutineScope {
+                    turnToolCalls.map { toolCall ->
+                        kotlinx.coroutines.async {
+                            val allowed = permissionManager?.checkPermission(toolCall.name, toolCall.input) ?: true
+                            if (!allowed) {
+                                ToolResult(toolCall, "Operation denied by user.", true)
+                            } else {
+                                val result = executeTool(toolCall)
+                                ToolResult(toolCall, result.output, result.isError)
+                            }
                         }
-                    }
+                    }.map { it.await() }
                 }
 
-                for (deferred in results) {
-                    val (toolCall, output, isError) = deferred.await()
-                    emit(AgentEvent.ToolStart(toolCall.id, toolCall.name, toolCall.input.toString()))
-                    emit(AgentEvent.ToolEnd(toolCall.id, toolCall.name, output, isError))
+                for (tr in parallelResults) {
+                    emit(AgentEvent.ToolStart(tr.toolCall.id, tr.toolCall.name, tr.toolCall.input.toString()))
+                    emit(AgentEvent.ToolEnd(tr.toolCall.id, tr.toolCall.name, tr.output, tr.isError))
                     messages.add(ConversationMessage(
                         role = "tool",
-                        content = output,
-                        toolCallId = toolCall.id,
-                        toolName = toolCall.name
+                        content = tr.output,
+                        toolCallId = tr.toolCall.id,
+                        toolName = tr.toolCall.name
                     ))
-                    contextTracker?.let { trackToolExecution(it, toolCall, output, isError) }
+                    contextTracker?.let { trackToolExecution(it, tr.toolCall, tr.output, tr.isError) }
                 }
             }
 
