@@ -236,7 +236,7 @@ class FetchExtension : BuiltInExtension {
 
             return ToolResult(
                 isError = isError,
-                content = result
+                output = result
             )
 
         } catch (e: SocketTimeoutException) {

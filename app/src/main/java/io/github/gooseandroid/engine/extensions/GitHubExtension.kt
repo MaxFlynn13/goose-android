@@ -159,7 +159,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
                 else -> ToolResult(isError = true, output = "Unknown tool: $name")
             }
         } catch (e: GitHubApiException) {
-            ToolResult(isError = true, content = e.message ?: "GitHub API error")
+            ToolResult(isError = true, output = e.message ?: "GitHub API error")
         } catch (e: IOException) {
             ToolResult(isError = true, output = "Network error: ${e.message}")
         } catch (e: Exception) {
@@ -199,7 +199,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
             sb.appendLine()
         }
 
-        return ToolResult(content = sb.toString().trimEnd())
+        return ToolResult(output = sb.toString().trimEnd())
     }
 
     private suspend fun getFileContents(input: JSONObject): ToolResult {
@@ -235,7 +235,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
                 }
                 sb.appendLine("$icon $name${if (type == "file") " ($size bytes)" else ""}")
             }
-            ToolResult(content = sb.toString().trimEnd())
+            ToolResult(output = sb.toString().trimEnd())
         } else {
             // Single file
             val json = JSONObject(response)
@@ -263,7 +263,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
                 sb.appendLine("---")
                 sb.appendLine(content)
 
-                ToolResult(content = sb.toString().trimEnd())
+                ToolResult(output = sb.toString().trimEnd())
             } else {
                 ToolResult(output = "Entry is of type '$type': ${json.optString("name", path)}")
             }
@@ -310,7 +310,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
             sb.appendLine("URL: ${commit.optString("html_url", "N/A")}")
         }
 
-        return ToolResult(content = sb.toString().trimEnd())
+        return ToolResult(output = sb.toString().trimEnd())
     }
 
     private suspend fun createIssue(input: JSONObject): ToolResult {
@@ -355,7 +355,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
             }
         }
 
-        return ToolResult(content = sb.toString().trimEnd())
+        return ToolResult(output = sb.toString().trimEnd())
     }
 
     private suspend fun listIssues(input: JSONObject): ToolResult {
@@ -418,7 +418,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
             }
         }
 
-        return ToolResult(content = sb.toString().trimEnd())
+        return ToolResult(output = sb.toString().trimEnd())
     }
 
     private suspend fun createPullRequest(input: JSONObject): ToolResult {
@@ -459,7 +459,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
             sb.appendLine("Created by: ${user.optString("login", "N/A")}")
         }
 
-        return ToolResult(content = sb.toString().trimEnd())
+        return ToolResult(output = sb.toString().trimEnd())
     }
 
     private suspend fun searchCode(input: JSONObject): ToolResult {
@@ -491,7 +491,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
             sb.appendLine()
         }
 
-        return ToolResult(content = sb.toString().trimEnd())
+        return ToolResult(output = sb.toString().trimEnd())
     }
 
     private suspend fun getPullRequest(input: JSONObject): ToolResult {
@@ -552,7 +552,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
             }
         }
 
-        return ToolResult(content = sb.toString().trimEnd())
+        return ToolResult(output = sb.toString().trimEnd())
     }
 
     private suspend fun listCommits(input: JSONObject): ToolResult {
@@ -599,7 +599,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
             }
         }
 
-        return ToolResult(content = sb.toString().trimEnd())
+        return ToolResult(output = sb.toString().trimEnd())
     }
 
     // --- HTTP Helpers ---
