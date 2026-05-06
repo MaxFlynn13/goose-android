@@ -614,7 +614,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val role = when (msg.role) {
                 MessageRole.USER -> "user"
                 MessageRole.ASSISTANT -> "assistant"
-                MessageRole.SYSTEM -> continue // should not reach here, but safety
+                MessageRole.SYSTEM -> continue
+                MessageRole.TOOL -> "tool"
             }
 
             // For assistant messages with tool calls, include ToolCallInfo so
