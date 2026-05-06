@@ -69,6 +69,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _toolCalls = MutableStateFlow<List<ToolCall>>(emptyList())
     val toolCalls: StateFlow<List<ToolCall>> = _toolCalls.asStateFlow()
 
+    // Message queue — users can type while Goose is working
+    data class QueuedMessage(val id: String = UUID.randomUUID().toString(), val text: String)
+    private val _messageQueue = MutableStateFlow<List<QueuedMessage>>(emptyList())
+    val messageQueue: StateFlow<List<QueuedMessage>> = _messageQueue.asStateFlow()
+
     private val _pendingPrompt = MutableStateFlow<String?>(null)
     val pendingPrompt: StateFlow<String?> = _pendingPrompt.asStateFlow()
 
@@ -263,6 +268,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // ─── Message Sending ────────────────────────────────────────────────────────
 
     fun sendMessage(text: String) {
+        // If Goose is currently working, queue the message
+        if (_isGenerating.value) {
+            _messageQueue.value = _messageQueue.value + QueuedMessage(text = text)
+            return
+        }
+
         // Ensure session exists synchronously BEFORE anything else
         if (_currentSessionId.value == null) {
             createNewSession()
@@ -273,6 +284,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         )
         sessionManager.generateAutoTitle(text)
         launchEngineRequest(text)
+    }
+
+    /** Remove a queued message */
+    fun removeQueuedMessage(id: String) {
+        _messageQueue.value = _messageQueue.value.filter { it.id != id }
+    }
+
+    /** Edit a queued message */
+    fun editQueuedMessage(id: String, newText: String) {
+        _messageQueue.value = _messageQueue.value.map {
+            if (it.id == id) it.copy(text = newText) else it
+        }
+    }
+
+    /** Send the next queued message immediately (interrupts current generation) */
+    fun sendNextQueued() {
+        val queue = _messageQueue.value
+        if (queue.isEmpty()) return
+        val next = queue.first()
+        _messageQueue.value = queue.drop(1)
+        cancelGeneration()
+        // Small delay to let cancellation propagate, then send
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(100)
+            sendMessage(next.text)
+        }
     }
 
     fun sendMessageWithAttachments(text: String, attachments: List<AttachmentInfo>) {
@@ -352,6 +389,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope.launch(Dispatchers.IO + NonCancellable) {
                     sessionManager.saveCurrentSessionMessages()
                     sessionManager.updateCurrentSessionMetadata()
+                }
+                // Process queued messages
+                if (_messageQueue.value.isNotEmpty()) {
+                    val next = _messageQueue.value.first()
+                    _messageQueue.value = _messageQueue.value.drop(1)
+                    viewModelScope.launch {
+                        kotlinx.coroutines.delay(200)
+                        sendMessage(next.text)
+                    }
                 }
             }
         }

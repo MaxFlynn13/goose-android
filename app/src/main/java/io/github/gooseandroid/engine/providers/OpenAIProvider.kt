@@ -161,6 +161,11 @@ class OpenAIProvider(
                             trySend(StreamEvent.ToolCallEnd(id, name, inputJson))
                         }
                         trySend(StreamEvent.Done(fullText.toString(), toolCalls.toList()))
+                        // Break out immediately — don't wait for connection close
+                        reader.close()
+                        response.close()
+                        close()
+                        return@callbackFlow
                     }
                     continue
                 }

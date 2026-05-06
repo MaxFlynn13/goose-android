@@ -225,6 +225,13 @@ class AnthropicProvider(
 
                         "message_stop" -> {
                             trySend(StreamEvent.Done(fullText.toString(), toolCalls.toList()))
+                            // CRITICAL: break out of the read loop immediately.
+                            // The server may keep the connection alive (HTTP keep-alive)
+                            // but we have all the data we need.
+                            reader.close()
+                            response.close()
+                            close()
+                            return@callbackFlow
                         }
 
                         "error" -> {

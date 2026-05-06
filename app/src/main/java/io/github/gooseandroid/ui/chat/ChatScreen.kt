@@ -56,6 +56,7 @@ fun ChatScreen(
     val isLoadingSession by viewModel.isLoadingSession.collectAsState()
     val streamingContent by viewModel.streamingContent.collectAsState()
     val toolCalls by viewModel.toolCalls.collectAsState()
+    val messageQueue by viewModel.messageQueue.collectAsState()
     val pendingPrompt by viewModel.pendingPrompt.collectAsState()
     val currentSessionTitle by viewModel.currentSessionTitle.collectAsState()
     val lastError by viewModel.lastError.collectAsState()
@@ -250,6 +251,31 @@ fun ChatScreen(
                 showDone = showDone,
                 onCancel = { viewModel.cancelGeneration() }
             )
+
+            // Message queue indicator
+            if (messageQueue.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "${messageQueue.size} queued",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    TextButton(onClick = { viewModel.sendNextQueued() }) {
+                        Text("Send Now", style = MaterialTheme.typography.labelSmall)
+                    }
+                    TextButton(onClick = {
+                        messageQueue.forEach { viewModel.removeQueuedMessage(it.id) }
+                    }) {
+                        Text("Clear", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
 
             // Input bar
             ChatInputBar(

@@ -202,6 +202,11 @@ class GoogleProvider(
                     if (finishReason == "STOP" || finishReason == "MAX_TOKENS") {
                         doneEmitted = true
                         trySend(StreamEvent.Done(fullText.toString(), toolCalls.toList()))
+                        // Break out immediately — don't wait for connection close
+                        reader.close()
+                        response.close()
+                        close()
+                        return@callbackFlow
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Error parsing SSE chunk: ${e.message}")
