@@ -8,6 +8,8 @@ import io.github.gooseandroid.engine.providers.LlmToolCall
 import io.github.gooseandroid.engine.providers.StreamEvent
 import io.github.gooseandroid.engine.tools.ToolRouter
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -303,9 +305,9 @@ The working directory is the user's project workspace.
                 // Multiple tool calls — execute in parallel using coroutineScope
                 data class ToolResult(val toolCall: LlmToolCall, val output: String, val isError: Boolean)
 
-                val parallelResults = kotlinx.coroutines.coroutineScope {
+                val parallelResults = coroutineScope {
                     turnToolCalls.map { toolCall ->
-                        kotlinx.coroutines.async {
+                        async {
                             val allowed = permissionManager?.checkPermission(toolCall.name, toolCall.input) ?: true
                             if (!allowed) {
                                 ToolResult(toolCall, "Operation denied by user.", true)
@@ -314,7 +316,7 @@ The working directory is the user's project workspace.
                                 ToolResult(toolCall, result.output, result.isError)
                             }
                         }
-                    }.map { it.await() }
+                    .awaitAll()
                 }
 
                 for (tr in parallelResults) {
