@@ -37,6 +37,8 @@ class StreamingAgentLoop(
     private val provider: LlmProvider,
     private val toolRouter: ToolRouter,
     private val mcpManager: McpExtensionManager,
+    private val permissionManager: PermissionManager? = null,
+    private val contextTracker: ContextTracker? = null,
     private val maxIterations: Int = 25
 ) {
     companion object {
