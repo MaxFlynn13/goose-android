@@ -29,6 +29,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import io.github.gooseandroid.engine.PermissionManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,6 +62,7 @@ fun ChatScreen(
     val pendingPrompt by viewModel.pendingPrompt.collectAsState()
     val currentSessionTitle by viewModel.currentSessionTitle.collectAsState()
     val lastError by viewModel.lastError.collectAsState()
+    val pendingPermission by viewModel.pendingPermission.collectAsState()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -304,6 +307,55 @@ fun ChatScreen(
                     .windowInsetsPadding(WindowInsets.navigationBars)
             )
         }
+    }
+
+    // Permission approval dialog
+    pendingPermission?.let { request ->
+        AlertDialog(
+            onDismissRequest = { viewModel.respondToPermission(PermissionManager.PermissionResult.DENY) },
+            title = { Text("Permission Required") },
+            text = {
+                Column {
+                    Text(request.description, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            text = request.command,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                    if (request.risk == PermissionManager.RiskLevel.HIGH ||
+                        request.risk == PermissionManager.RiskLevel.CRITICAL) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "Risk: ${request.risk.name}",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.respondToPermission(PermissionManager.PermissionResult.ALLOW) }) {
+                    Text("Allow")
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { viewModel.respondToPermission(PermissionManager.PermissionResult.DENY) }) {
+                        Text("Deny")
+                    }
+                    TextButton(onClick = { viewModel.respondToPermission(PermissionManager.PermissionResult.ALLOW_ALL_SESSION) }) {
+                        Text("Allow All")
+                    }
+                }
+            }
+        )
     }
 }
 

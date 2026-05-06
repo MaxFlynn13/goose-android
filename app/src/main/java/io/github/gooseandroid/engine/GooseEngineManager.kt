@@ -24,6 +24,10 @@ class GooseEngineManager(private val context: Context) {
 
     private var engine: KotlinNativeEngine? = null
 
+    /** Access to permission manager for UI dialog */
+    val permissionManager: PermissionManager?
+        get() = engine?.permissionManager
+
     private val _engineInfo = MutableStateFlow("Initializing...")
     val engineInfo: StateFlow<String> = _engineInfo.asStateFlow()
 

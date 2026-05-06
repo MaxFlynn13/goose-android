@@ -86,6 +86,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
 
+    // Permission requests from the engine (for destructive operation approval)
+    private val _pendingPermission = MutableStateFlow<PermissionManager.PermissionRequest?>(null)
+    val pendingPermission: StateFlow<PermissionManager.PermissionRequest?> = _pendingPermission.asStateFlow()
+
     val tokenCount: StateFlow<Int> = _messages
         .map { msgs -> msgs.sumOf { it.content.length } / 4 }
         .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
@@ -102,6 +106,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             engineManager.initialize()
             if (_sessions.value.isEmpty()) createNewSession()
         }
+        // Collect permission requests in a separate coroutine (long-lived)
+        viewModelScope.launch {
+            // Wait for engine to be ready before collecting
+            engineManager.getEngine()
+            engineManager.permissionManager?.permissionRequests?.collect { request ->
+                _pendingPermission.value = request
+            }
+        }
+    }
+
+    /** Respond to a permission request from the engine */
+    fun respondToPermission(result: PermissionManager.PermissionResult) {
+        val request = _pendingPermission.value ?: return
+        request.deferred.complete(result)
+        _pendingPermission.value = null
     }
 
     private fun setupCallbacks() {
