@@ -3,6 +3,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.chaquo.python")
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        pip {
+            install("requests")
+            install("pyyaml")
+            install("beautifulsoup4")
+            install("httpx")
+        }
+    }
 }
 
 android {

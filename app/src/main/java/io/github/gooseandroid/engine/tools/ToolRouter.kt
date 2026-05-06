@@ -30,6 +30,15 @@ class ToolRouter(
         register(TreeTool(workspaceDir))
         register(GitTool(workspaceDir).AsRegisteredTool())
 
+        // Python tool (Chaquopy embedded CPython)
+        context?.let { ctx ->
+            try {
+                register(PythonTool(ctx, workspaceDir))
+            } catch (e: Exception) {
+                android.util.Log.w("ToolRouter", "Python tool unavailable: ${e.message}")
+            }
+        }
+
         // App control tools (if context available)
         context?.let {
             register(SkillManageTool(it))

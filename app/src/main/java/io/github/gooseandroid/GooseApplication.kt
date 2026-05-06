@@ -16,6 +16,18 @@ class GooseApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // Initialize Python runtime (Chaquopy)
+        try {
+            if (!com.chaquo.python.Python.isStarted()) {
+                com.chaquo.python.Python.start(
+                    com.chaquo.python.android.AndroidPlatform(this)
+                )
+                Log.i(TAG, "Python runtime initialized")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Python runtime not available: ${e.message}")
+        }
+
         // Install global crash handler that logs the error
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
