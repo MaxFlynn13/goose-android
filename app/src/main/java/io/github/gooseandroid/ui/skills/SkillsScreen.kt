@@ -151,6 +151,88 @@ class SkillStore(private val context: Context) {
                 category = "Development",
                 isBuiltin = true,
                 createdAt = 0L
+            ),
+            Skill(
+                id = "builtin-full-diagnostic",
+                name = "Full System Diagnostic",
+                description = "Run a comprehensive test of all Goose tools and capabilities",
+                instructions = """Run a complete diagnostic test of all available tools and report results. Test each tool individually and report PASS/FAIL with details.
+
+## Test Plan
+
+### 1. Shell Tool
+Run: `echo "Shell test: $(date)" && ls -la`
+Expected: Command executes, shows output with timestamp and file listing.
+
+### 2. File Write Tool
+Write a file called `diagnostic_test.txt` with content: "Diagnostic test written at [timestamp]"
+Expected: File created successfully.
+
+### 3. File Edit Tool
+Edit `diagnostic_test.txt` — find "Diagnostic test" and replace with "EDITED Diagnostic test"
+Expected: Edit applied successfully.
+
+### 4. Tree Tool
+List the workspace directory structure.
+Expected: Shows files including diagnostic_test.txt.
+
+### 5. Git Tool
+Run: git init in a temp directory called `git_test_dir`, then git status.
+Expected: Repository initialized, status shows clean working tree.
+
+### 6. Git Clone (Public Repo)
+Clone https://github.com/nicoulaj/busybox-static.git with depth 1 into `clone_test_dir`.
+Expected: Repository cloned successfully.
+
+### 7. Python Tool
+Execute: `import sys; print(f"Python {sys.version}"); print(2+2); import json; print(json.dumps({"test": "passed"}))`
+Expected: Shows Python version, "4", and JSON output.
+
+### 8. Python with Packages
+Execute: `import requests; print(f"requests version: {requests.__version__}"); import yaml; print(f"pyyaml version: {yaml.__version__}")`
+Expected: Shows package versions confirming they're installed.
+
+### 9. Web Search Tool
+Search for: "Android development 2025"
+Expected: Returns search results with titles and URLs.
+
+### 10. Fetch Tool
+Fetch: https://httpbin.org/json
+Expected: Returns JSON response with data.
+
+### 11. GitHub Extension (if configured)
+Search repositories for: "android jetpack compose"
+Expected: Returns repository results (or reports no GitHub token configured).
+
+### 12. Brain Tool
+Create a brain node with title "Diagnostic Test" and content "This node was created during system diagnostic."
+Then search for "Diagnostic" to verify it was stored.
+Expected: Node created and found via search.
+
+### 13. Manage Skills Tool
+List all available skills.
+Expected: Returns list including this diagnostic skill.
+
+### 14. Manage Projects Tool
+List all projects.
+Expected: Returns project list (may be empty).
+
+### 15. Schedule Tool
+List all scheduled tasks.
+Expected: Returns task list (may be empty).
+
+## Cleanup
+After all tests, delete: diagnostic_test.txt, git_test_dir/, clone_test_dir/
+
+## Report Format
+Present results as a table:
+| # | Tool | Test | Status | Details |
+|---|------|------|--------|---------|
+
+End with a summary: X/15 PASSED, Y/15 FAILED, and any recommendations for fixing failures.""",
+                category = "System",
+                isBuiltin = true,
+                createdAt = 0L
             )
         )
     }
