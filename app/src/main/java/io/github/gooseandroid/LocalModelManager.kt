@@ -54,104 +54,96 @@ class LocalModelManager(private val context: Context) {
         /**
          * Model catalog using MediaPipe/LiteRT-compatible formats.
          *
-         * MediaPipe LlmInference supports:
-         * - .bin files (MediaPipe GPU format, from AI Edge Model Garden)
-         * - .tflite files (TensorFlow Lite format)
+         * These models are sourced from the Google AI Edge Gallery and
+         * litert-community repositories on HuggingFace. They use .task
+         * format which MediaPipe's LlmInference API loads natively with
+         * GPU acceleration (OpenCL/Vulkan on Adreno/Mali GPUs).
          *
-         * These are sourced from Google's official AI Edge repositories.
-         * Note: Some models require HuggingFace authentication.
-         * We use publicly available models where possible.
+         * Format: .task (MediaPipe Task bundle) or .bin (raw weights)
+         * Quantization: int4 (4-bit) for optimal mobile performance
          */
         val MODEL_CATALOG = listOf(
-            // === Gemma 2 2B (Google, MediaPipe-optimized) ===
+            // === Gemma 3 (Google, latest stable) ===
             ModelInfo(
-                id = "gemma2-2b-it-gpu",
-                name = "Gemma 2 2B (GPU)",
-                description = "Google's Gemma 2 optimized for MediaPipe GPU inference. Fast and efficient.",
-                sizeBytes = 1_300_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Gemma2-2B-IT/resolve/main/gemma2-2b-it-gpu-int4.bin",
-                filename = "gemma2-2b-it-gpu-int4.bin",
-                format = ModelFormat.LITERT,
-                minRamMb = 2048,
-                recommended = true
-            ),
-
-            // === Gemma 3 1B (Google, smallest, fastest) ===
-            ModelInfo(
-                id = "gemma3-1b-it-gpu",
-                name = "Gemma 3 1B (GPU)",
-                description = "Google's smallest Gemma 3. Ultra-fast inference on mobile GPU.",
-                sizeBytes = 900_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task",
+                id = "gemma3-1b-it",
+                name = "Gemma 3 1B",
+                description = "Google's smallest Gemma 3. Ultra-fast, great for simple tasks and quick responses.",
+                sizeBytes = 560_000_000L,
+                downloadUrl = "$HF_BASE/google/gemma-3-1b-it-litert/resolve/main/gemma3-1b-it-int4.task",
                 filename = "gemma3-1b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 2048,
                 recommended = true
             ),
-
-            // === Gemma 3 4B (Google, recommended) ===
             ModelInfo(
-                id = "gemma3-4b-it-gpu",
-                name = "Gemma 3 4B (GPU)",
+                id = "gemma3-4b-it",
+                name = "Gemma 3 4B",
                 description = "Best balance of speed and intelligence. Recommended for most tasks.",
-                sizeBytes = 2_500_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Gemma3-4B-IT/resolve/main/gemma3-4b-it-int4.task",
+                sizeBytes = 2_300_000_000L,
+                downloadUrl = "$HF_BASE/google/gemma-3-4b-it-litert/resolve/main/gemma3-4b-it-int4.task",
                 filename = "gemma3-4b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 4096,
                 recommended = true
             ),
 
-            // === Gemma 3 12B (Google, high quality) ===
+            // === Gemma 4 (Google, newest generation) ===
             ModelInfo(
-                id = "gemma3-12b-it-gpu",
-                name = "Gemma 3 12B (GPU)",
-                description = "High-quality reasoning. Needs 8GB+ RAM but significantly smarter.",
-                sizeBytes = 6_800_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Gemma3-12B-IT/resolve/main/gemma3-12b-it-int4.task",
-                filename = "gemma3-12b-it-int4.task",
+                id = "gemma4-2b-it",
+                name = "Gemma 4 2B",
+                description = "Google's newest model. Improved reasoning and instruction following.",
+                sizeBytes = 1_400_000_000L,
+                downloadUrl = "$HF_BASE/google/gemma-4-2b-it-litert/resolve/main/gemma4-2b-it-int4.task",
+                filename = "gemma4-2b-it-int4.task",
+                format = ModelFormat.LITERT,
+                minRamMb = 2048,
+                recommended = true
+            ),
+            ModelInfo(
+                id = "gemma4-4b-it",
+                name = "Gemma 4 4B",
+                description = "Google's newest 4B model. Near-cloud quality for on-device inference.",
+                sizeBytes = 2_500_000_000L,
+                downloadUrl = "$HF_BASE/google/gemma-4-4b-it-litert/resolve/main/gemma4-4b-it-int4.task",
+                filename = "gemma4-4b-it-int4.task",
+                format = ModelFormat.LITERT,
+                minRamMb = 4096,
+                recommended = true
+            ),
+            ModelInfo(
+                id = "gemma4-12b-it",
+                name = "Gemma 4 12B",
+                description = "Google's most capable on-device model. Excellent reasoning, needs 8GB+ RAM.",
+                sizeBytes = 6_500_000_000L,
+                downloadUrl = "$HF_BASE/google/gemma-4-12b-it-litert/resolve/main/gemma4-12b-it-int4.task",
+                filename = "gemma4-12b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 8192,
                 recommended = false
             ),
 
-            // === Llama 3.2 1B (Meta, via LiteRT community) ===
+            // === Llama 3.2 (Meta, via Google AI Edge) ===
             ModelInfo(
-                id = "llama-3.2-1b-gpu",
-                name = "Llama 3.2 1B (GPU)",
-                description = "Meta's smallest Llama, optimized for MediaPipe. Ultra-fast.",
-                sizeBytes = 800_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Llama-3.2-1B-Instruct/resolve/main/llama-3.2-1b-instruct-int4.task",
-                filename = "llama-3.2-1b-instruct-int4.task",
+                id = "llama-3.2-1b-it",
+                name = "Llama 3.2 1B",
+                description = "Meta's smallest Llama optimized for mobile. Ultra-fast responses.",
+                sizeBytes = 750_000_000L,
+                downloadUrl = "$HF_BASE/google/llama-3.2-1b-it-litert/resolve/main/llama-3.2-1b-it-int4.task",
+                filename = "llama-3.2-1b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 2048,
                 recommended = true
             ),
-
-            // === Llama 3.2 3B (Meta, via LiteRT community) ===
             ModelInfo(
-                id = "llama-3.2-3b-gpu",
-                name = "Llama 3.2 3B (GPU)",
-                description = "Meta's 3B Llama for MediaPipe. Good balance of speed and capability.",
-                sizeBytes = 2_000_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Llama-3.2-3B-Instruct/resolve/main/llama-3.2-3b-instruct-int4.task",
-                filename = "llama-3.2-3b-instruct-int4.task",
+                id = "llama-3.2-3b-it",
+                name = "Llama 3.2 3B",
+                description = "Meta's 3B Llama. Good balance of speed and capability on mobile.",
+                sizeBytes = 1_800_000_000L,
+                downloadUrl = "$HF_BASE/google/llama-3.2-3b-it-litert/resolve/main/llama-3.2-3b-it-int4.task",
+                filename = "llama-3.2-3b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 4096,
                 recommended = true
-            ),
-
-            // === Phi 3.5 Mini (Microsoft, via LiteRT community) ===
-            ModelInfo(
-                id = "phi-3.5-mini-gpu",
-                name = "Phi 3.5 Mini (GPU)",
-                description = "Microsoft's compact model. Strong reasoning for its size.",
-                sizeBytes = 2_200_000_000L,
-                downloadUrl = "$HF_BASE/litert-community/Phi-3.5-mini/resolve/main/phi-3.5-mini-int4.task",
-                filename = "phi-3.5-mini-int4.task",
-                format = ModelFormat.LITERT,
-                minRamMb = 4096,
-                recommended = false
             )
         )
     }
@@ -389,8 +381,7 @@ data class ModelInfo(
 )
 
 enum class ModelFormat {
-    LITERT,     // Google AI Edge LiteRT (.task file)
-    GGUF        // llama.cpp format (fallback)
+    LITERT      // Google AI Edge LiteRT (.task/.bin file for MediaPipe)
 }
 
 data class ModelStatus(

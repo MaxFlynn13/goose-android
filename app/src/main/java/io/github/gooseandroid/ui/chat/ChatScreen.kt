@@ -30,6 +30,12 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.input.key.Key
+import androidx.compose.input.key.KeyEventType
+import androidx.compose.input.key.isCtrlPressed
+import androidx.compose.input.key.key
+import androidx.compose.input.key.onKeyEvent
+import androidx.compose.input.key.type
 import io.github.gooseandroid.engine.PermissionManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -130,7 +136,31 @@ fun ChatScreen(
     }
 
     Scaffold(
-        modifier = modifier,
+        modifier = modifier
+            .onKeyEvent { event ->
+                // Ctrl+Enter: send message (ChromeOS keyboard shortcut)
+                if (event.type == KeyEventType.KeyDown &&
+                    event.key == Key.Enter &&
+                    event.isCtrlPressed) {
+                    // Handled by ChatInputBar's keyboard actions
+                    true
+                }
+                // Escape: cancel generation
+                else if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    if (isGenerating) {
+                        viewModel.cancelGeneration()
+                        true
+                    } else false
+                }
+                // Ctrl+N: new chat
+                else if (event.type == KeyEventType.KeyDown &&
+                    event.key == Key.N &&
+                    event.isCtrlPressed) {
+                    onNewChat()
+                    true
+                }
+                else false
+            },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(

@@ -16,9 +16,13 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -29,10 +33,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.rememberAsyncImagePainter
+import coil.request.ImageRequest
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -47,7 +55,8 @@ data class FileAttachment(
     val name: String,
     val content: String,
     val mimeType: String,
-    val sizeBytes: Long = 0L
+    val sizeBytes: Long = 0L,
+    val isImage: Boolean = false
 )
 
 /**
@@ -86,8 +95,17 @@ fun ChatInputBar(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
+            // Take persistable read permission so the URI stays accessible for thumbnail display
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: SecurityException) {
+                // Not all providers support persistable permissions; continue anyway
+            }
+
             val fileSize = getFileSize(context, uri)
-            // Fix #2: Check file size before reading (max 1MB)
+            // Check file size before reading (max 1MB)
             if (fileSize > MAX_FILE_SIZE_BYTES) {
                 Toast.makeText(
                     context,
@@ -99,6 +117,7 @@ fun ChatInputBar(
             val fileContent = readFileContent(context, uri)
             val fileName = getFileName(context, uri)
             val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+            val isImage = mimeType.startsWith("image/")
             if (fileContent != null) {
                 attachments.add(
                     FileAttachment(
@@ -106,9 +125,16 @@ fun ChatInputBar(
                         name = fileName,
                         content = fileContent,
                         mimeType = mimeType,
-                        sizeBytes = fileSize
+                        sizeBytes = fileSize,
+                        isImage = isImage
                     )
                 )
+            } else {
+                Toast.makeText(
+                    context,
+                    "Could not read file: $fileName",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }
@@ -200,7 +226,7 @@ fun ChatInputBar(
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            // Attachment chips row
+            // Attachment previews row
             if (attachments.isNotEmpty()) {
                 Row(
                     modifier = Modifier
@@ -210,25 +236,66 @@ fun ChatInputBar(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     attachments.forEachIndexed { index, attachment ->
-                        InputChip(
-                            selected = false,
-                            onClick = { attachments.removeAt(index) },
-                            label = {
-                                // Fix #6: Show file size in attachment chips
-                                Text(
-                                    text = "${attachment.name} (${formatFileSize(attachment.sizeBytes)})",
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                        if (attachment.isImage) {
+                            // Image thumbnail preview with remove button
+                            Box(
+                                modifier = Modifier.size(72.dp)
+                            ) {
+                                Image(
+                                    painter = rememberAsyncImagePainter(
+                                        model = ImageRequest.Builder(context)
+                                            .data(attachment.uri)
+                                            .crossfade(true)
+                                            .size(144) // 2x for density
+                                            .build()
+                                    ),
+                                    contentDescription = attachment.name,
+                                    modifier = Modifier
+                                        .size(72.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.Crop
                                 )
-                            },
-                            trailingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Remove attachment",
-                                    modifier = Modifier.size(16.dp)
-                                )
+                                // Remove button overlay
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(20.dp)
+                                        .background(
+                                            color = MaterialTheme.colorScheme.errorContainer,
+                                            shape = CircleShape
+                                        )
+                                        .clickable { attachments.removeAt(index) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove attachment",
+                                        modifier = Modifier.size(12.dp),
+                                        tint = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
                             }
-                        )
+                        } else {
+                            // Text/other file chip
+                            InputChip(
+                                selected = false,
+                                onClick = { attachments.removeAt(index) },
+                                label = {
+                                    Text(
+                                        text = "${attachment.name} (${formatFileSize(attachment.sizeBytes)})",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                trailingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove attachment",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -308,7 +375,16 @@ fun ChatInputBar(
                         filePickerLauncher.launch(
                             arrayOf(
                                 "image/*",
-                                "text/*"
+                                "text/*",
+                                "application/json",
+                                "application/x-yaml",
+                                "application/yaml",
+                                "application/octet-stream", // fallback for .py, .kt, etc.
+                                "application/csv",
+                                "text/csv",
+                                "text/x-python",
+                                "text/x-kotlin",
+                                "text/markdown"
                             )
                         )
                     }
@@ -388,26 +464,55 @@ private fun sendWithAttachments(
 // Helper: Read file content from URI
 // ---------------------------------------------------------------------------
 
+/** Text-readable file extensions (used when MIME type is ambiguous) */
+private val TEXT_FILE_EXTENSIONS = setOf(
+    "txt", "py", "kt", "kts", "java", "json", "yaml", "yml",
+    "md", "csv", "xml", "html", "css", "js", "ts", "sh",
+    "toml", "ini", "cfg", "conf", "log", "sql", "gradle",
+    "properties", "swift", "rs", "go", "rb", "c", "cpp", "h"
+)
+
+/** MIME types that should be treated as readable text */
+private val TEXT_MIME_TYPES = setOf(
+    "application/json",
+    "application/x-yaml",
+    "application/yaml",
+    "application/xml",
+    "application/csv",
+    "application/x-python",
+    "application/javascript",
+    "application/typescript",
+    "application/toml"
+)
+
+private fun isTextFile(mimeType: String, fileName: String): Boolean {
+    if (mimeType.startsWith("text/")) return true
+    if (mimeType in TEXT_MIME_TYPES) return true
+    val extension = fileName.substringAfterLast('.', "").lowercase()
+    return extension in TEXT_FILE_EXTENSIONS
+}
+
 private fun readFileContent(context: Context, uri: Uri): String? {
     return try {
         val mimeType = context.contentResolver.getType(uri) ?: ""
+        val fileName = getFileName(context, uri)
 
-        // Fix #2: Check file size before reading
+        // Check file size before reading
         val fileSize = getFileSize(context, uri)
         if (fileSize > MAX_FILE_SIZE_BYTES) {
             return null
         }
 
         if (mimeType.startsWith("image/")) {
-            // Fix #3: Read image bytes and encode to base64 for multimodal API calls
+            // Read image bytes and encode to base64 for multimodal API calls
             val inputStream = context.contentResolver.openInputStream(uri) ?: return null
             val bytes = inputStream.use { it.readBytes() }
             val base64String = Base64.encodeToString(bytes, Base64.NO_WRAP)
             "data:$mimeType;base64,$base64String"
-        } else {
-            // For text files, read content
+        } else if (isTextFile(mimeType, fileName)) {
+            // For text-based files, read content as UTF-8
             val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-            val reader = BufferedReader(InputStreamReader(inputStream))
+            val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
             val content = reader.use { it.readText() }
             // Limit content to prevent excessively large messages
             if (content.length > 50_000) {
@@ -415,6 +520,12 @@ private fun readFileContent(context: Context, uri: Uri): String? {
             } else {
                 content
             }
+        } else {
+            // Unknown binary file — encode as base64 with a note
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+            val bytes = inputStream.use { it.readBytes() }
+            val base64String = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            "[Binary file, base64 encoded]\ndata:$mimeType;base64,$base64String"
         }
     } catch (e: Exception) {
         null

@@ -24,10 +24,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import io.github.gooseandroid.data.SessionRepository
 import io.github.gooseandroid.data.models.SessionInfo
 import io.github.gooseandroid.data.models.getProviderById
 import kotlinx.coroutines.Dispatchers
@@ -41,12 +45,30 @@ import java.util.*
 
 private const val TAG = "HistoryScreen"
 private const val SESSIONS_FILE = "sessions.json"
+private const val MAX_SEARCH_RESULTS = 50
+private const val SNIPPET_CONTEXT_CHARS = 60
 
 private val json = Json {
     ignoreUnknownKeys = true
     prettyPrint = true
     encodeDefaults = true
 }
+
+// ---------------------------------------------------------------------------
+// Search result model
+// ---------------------------------------------------------------------------
+
+/**
+ * Represents a session that matched the search query, optionally with a
+ * snippet from a matching message.
+ */
+private data class SearchResult(
+    val session: SessionInfo,
+    val matchedInTitle: Boolean,
+    val matchedInLastMessage: Boolean,
+    val matchedInContent: Boolean,
+    val snippet: String? = null
+)
 
 // ---------------------------------------------------------------------------
 // Date grouping
@@ -93,6 +115,31 @@ private fun groupByDate(sessions: List<SessionInfo>): Map<String, List<SessionIn
     }
 
     // Remove empty groups
+    return grouped.filterValues { it.isNotEmpty() }
+}
+
+private fun groupSearchResultsByDate(results: List<SearchResult>): Map<String, List<SearchResult>> {
+    val todayStart = startOfDay()
+    val yesterdayStart = startOfDay(-1)
+    val weekAgoStart = startOfDay(-7)
+
+    val grouped = linkedMapOf<String, MutableList<SearchResult>>()
+    for (group in DateGroup.entries) {
+        grouped[group.label] = mutableListOf()
+    }
+
+    val sorted = results.sortedByDescending { it.session.createdAt }
+    for (result in sorted) {
+        val ts = result.session.createdAt
+        val bucket = when {
+            ts >= todayStart -> DateGroup.TODAY
+            ts >= yesterdayStart -> DateGroup.YESTERDAY
+            ts >= weekAgoStart -> DateGroup.THIS_WEEK
+            else -> DateGroup.OLDER
+        }
+        grouped[bucket.label]!!.add(result)
+    }
+
     return grouped.filterValues { it.isNotEmpty() }
 }
 
@@ -147,6 +194,42 @@ private fun exportSessionJson(context: Context, session: SessionInfo) {
     val chooser = Intent.createChooser(sendIntent, "Export Session")
     chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     context.startActivity(chooser)
+}
+
+// ---------------------------------------------------------------------------
+// Full-text search helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Searches through message content for a session and returns a snippet
+ * around the first match, or null if no match found.
+ */
+private fun searchSessionMessages(
+    repository: SessionRepository,
+    sessionId: String,
+    query: String
+): String? {
+    val messages = repository.loadMessagesFromDiskSync(sessionId)
+    val q = query.lowercase()
+
+    for (msg in messages) {
+        val content = msg.content
+        if (content.isBlank()) continue
+
+        val idx = content.lowercase().indexOf(q)
+        if (idx >= 0) {
+            // Build a snippet around the match
+            val start = maxOf(0, idx - SNIPPET_CONTEXT_CHARS)
+            val end = minOf(content.length, idx + query.length + SNIPPET_CONTEXT_CHARS)
+            val snippet = buildString {
+                if (start > 0) append("…")
+                append(content.substring(start, end).replace('\n', ' '))
+                if (end < content.length) append("…")
+            }
+            return snippet.trim()
+        }
+    }
+    return null
 }
 
 // ---------------------------------------------------------------------------
@@ -205,10 +288,15 @@ fun HistoryScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val repository = remember { SessionRepository(context) }
+
     var sessions by remember { mutableStateOf<List<SessionInfo>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var searchQuery by remember { mutableStateOf("") }
     var searchActive by remember { mutableStateOf(false) }
+    var searchInMessages by remember { mutableStateOf(true) }
+    var isSearching by remember { mutableStateOf(false) }
+    var searchResults by remember { mutableStateOf<List<SearchResult>>(emptyList()) }
 
     // Dialog state
     var deleteTarget by remember { mutableStateOf<SessionInfo?>(null) }
@@ -226,23 +314,78 @@ fun HistoryScreen(
         isLoading = false
     }
 
-    // Filtered sessions
-    val filteredSessions by remember(sessions, searchQuery) {
-        derivedStateOf {
-            if (searchQuery.isBlank()) {
-                sessions
-            } else {
-                val q = searchQuery.lowercase()
-                sessions.filter { session ->
-                    session.title.lowercase().contains(q) ||
-                    session.lastMessage.lowercase().contains(q)
+    // Perform search when query or toggle changes
+    LaunchedEffect(searchQuery, searchInMessages, sessions) {
+        if (searchQuery.isBlank()) {
+            searchResults = emptyList()
+            isSearching = false
+            return@LaunchedEffect
+        }
+
+        isSearching = true
+        val q = searchQuery.lowercase()
+
+        val results = withContext(Dispatchers.IO) {
+            val matched = mutableListOf<SearchResult>()
+
+            for (session in sessions) {
+                if (matched.size >= MAX_SEARCH_RESULTS) break
+
+                val titleMatch = session.title.lowercase().contains(q)
+                val lastMsgMatch = session.lastMessage.lowercase().contains(q)
+
+                if (titleMatch || lastMsgMatch) {
+                    // Already matches by title/lastMessage - optionally get snippet
+                    var snippet: String? = null
+                    if (searchInMessages && !titleMatch) {
+                        snippet = searchSessionMessages(repository, session.id, searchQuery)
+                    }
+                    matched.add(
+                        SearchResult(
+                            session = session,
+                            matchedInTitle = titleMatch,
+                            matchedInLastMessage = lastMsgMatch,
+                            matchedInContent = snippet != null,
+                            snippet = snippet
+                        )
+                    )
+                } else if (searchInMessages) {
+                    // Search message content
+                    val snippet = searchSessionMessages(repository, session.id, searchQuery)
+                    if (snippet != null) {
+                        matched.add(
+                            SearchResult(
+                                session = session,
+                                matchedInTitle = false,
+                                matchedInLastMessage = false,
+                                matchedInContent = true,
+                                snippet = snippet
+                            )
+                        )
+                    }
                 }
             }
+
+            matched
+        }
+
+        searchResults = results
+        isSearching = false
+    }
+
+    // Filtered sessions for non-search mode
+    val filteredSessions by remember(sessions, searchQuery) {
+        derivedStateOf {
+            if (searchQuery.isBlank()) sessions else emptyList()
         }
     }
 
     val groupedSessions by remember(filteredSessions) {
         derivedStateOf { groupByDate(filteredSessions) }
+    }
+
+    val groupedSearchResults by remember(searchResults) {
+        derivedStateOf { groupSearchResultsByDate(searchResults) }
     }
 
     // ---- Delete confirmation dialog ----
@@ -346,7 +489,7 @@ fun HistoryScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { searchActive = !searchActive }) {
+                    IconButton(onClick = { searchActive = !searchActive; if (!searchActive) searchQuery = "" }) {
                         Icon(
                             if (searchActive) Icons.Default.SearchOff else Icons.Default.Search,
                             contentDescription = if (searchActive) "Close search" else "Search"
@@ -371,27 +514,75 @@ fun HistoryScreen(
                 enter = fadeIn(),
                 exit = fadeOut()
             ) {
-                val focusManager = LocalFocusManager.current
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    placeholder = { Text("Search sessions...") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Clear, contentDescription = "Clear")
+                Column {
+                    val focusManager = LocalFocusManager.current
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        placeholder = {
+                            Text(
+                                if (searchInMessages) "Search titles & messages..."
+                                else "Search session titles..."
+                            )
+                        },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
+                                }
                             }
+                        },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+                        shape = MaterialTheme.shapes.medium
+                    )
+
+                    // Search in messages toggle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.TextSnippet,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "Search in messages",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                    shape = MaterialTheme.shapes.medium
-                )
+                        Switch(
+                            checked = searchInMessages,
+                            onCheckedChange = { searchInMessages = it }
+                        )
+                    }
+
+                    // Search result count indicator
+                    if (searchQuery.isNotBlank() && !isSearching) {
+                        Text(
+                            text = "${searchResults.size} result${if (searchResults.size != 1) "s" else ""}" +
+                                    if (searchResults.size >= MAX_SEARCH_RESULTS) " (limit reached)" else "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                        )
+                    }
+                }
             }
 
             // ---- Content ----
@@ -409,8 +600,43 @@ fun HistoryScreen(
                     EmptyState(onNewChat = onNewChat)
                 }
 
-                filteredSessions.isEmpty() && searchQuery.isNotBlank() -> {
+                searchQuery.isNotBlank() && isSearching -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                "Searching messages...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                searchQuery.isNotBlank() && searchResults.isEmpty() && !isSearching -> {
                     SearchEmptyState(query = searchQuery)
+                }
+
+                searchQuery.isNotBlank() && searchResults.isNotEmpty() -> {
+                    SearchResultList(
+                        groupedResults = groupedSearchResults,
+                        query = searchQuery,
+                        onResume = onResumeSession,
+                        onRename = { session ->
+                            renameText = session.title
+                            renameTarget = session
+                        },
+                        onExport = { session ->
+                            exportSessionJson(context, session)
+                        },
+                        onDelete = { session ->
+                            deleteTarget = session
+                        }
+                    )
                 }
 
                 else -> {
@@ -487,6 +713,303 @@ private fun SessionList(
             item { Spacer(modifier = Modifier.height(8.dp)) }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Search result list with snippets
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SearchResultList(
+    groupedResults: Map<String, List<SearchResult>>,
+    query: String,
+    onResume: (String) -> Unit,
+    onRename: (SessionInfo) -> Unit,
+    onExport: (SessionInfo) -> Unit,
+    onDelete: (SessionInfo) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        groupedResults.forEach { (groupLabel, resultsInGroup) ->
+            stickyHeader(key = "search_$groupLabel") {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    Text(
+                        text = groupLabel,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
+                    )
+                }
+            }
+
+            items(
+                items = resultsInGroup,
+                key = { it.session.id }
+            ) { result ->
+                SearchResultCard(
+                    result = result,
+                    query = query,
+                    onResume = { onResume(result.session.id) },
+                    onRename = { onRename(result.session) },
+                    onExport = { onExport(result.session) },
+                    onDelete = { onDelete(result.session) },
+                    modifier = Modifier.animateItemPlacement()
+                )
+            }
+
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Search result card (with snippet highlighting)
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SearchResultCard(
+    result: SearchResult,
+    query: String,
+    onResume: () -> Unit,
+    onRename: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    val session = result.session
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .combinedClickable(
+                onClick = onResume,
+                onLongClick = { menuExpanded = true }
+            ),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 8.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.Top
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                // Title
+                Text(
+                    text = session.title.ifBlank { "Untitled Session" },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                // Show snippet if matched in content
+                if (result.matchedInContent && result.snippet != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    HighlightedSnippet(
+                        text = result.snippet,
+                        query = query
+                    )
+                } else if (session.lastMessage.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = session.lastMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                // Match source badge
+                if (result.matchedInContent && !result.matchedInTitle) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.TextSnippet,
+                            contentDescription = null,
+                            modifier = Modifier.size(12.dp),
+                            tint = MaterialTheme.colorScheme.tertiary
+                        )
+                        Text(
+                            text = "Found in message content",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Metadata row
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.Schedule,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatTimestamp(session.createdAt),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (session.messageCount > 0) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Outlined.ChatBubbleOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "${session.messageCount}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    val providerName = resolveProviderName(session.providerId, session.modelId)
+                    if (providerName.isNotBlank()) {
+                        SuggestionChip(
+                            onClick = {},
+                            label = {
+                                Text(
+                                    text = providerName,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            modifier = Modifier.height(24.dp),
+                            shape = MaterialTheme.shapes.small
+                        )
+                    }
+                }
+            }
+
+            // Overflow menu
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Session options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        onClick = { menuExpanded = false; onRename() },
+                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Export as JSON") },
+                        onClick = { menuExpanded = false; onExport() },
+                        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) }
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        onClick = { menuExpanded = false; onDelete() },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Highlighted snippet composable
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun HighlightedSnippet(text: String, query: String) {
+    val highlightColor = MaterialTheme.colorScheme.tertiary
+    val normalColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    val annotatedString = buildAnnotatedString {
+        val lowerText = text.lowercase()
+        val lowerQuery = query.lowercase()
+        var currentIndex = 0
+
+        while (currentIndex < text.length) {
+            val matchIndex = lowerText.indexOf(lowerQuery, currentIndex)
+            if (matchIndex < 0) {
+                // No more matches - append the rest
+                withStyle(SpanStyle(color = normalColor)) {
+                    append(text.substring(currentIndex))
+                }
+                break
+            }
+
+            // Append text before match
+            if (matchIndex > currentIndex) {
+                withStyle(SpanStyle(color = normalColor)) {
+                    append(text.substring(currentIndex, matchIndex))
+                }
+            }
+
+            // Append the match with highlight
+            withStyle(
+                SpanStyle(
+                    color = highlightColor,
+                    fontWeight = FontWeight.Bold,
+                    background = highlightColor.copy(alpha = 0.12f)
+                )
+            ) {
+                append(text.substring(matchIndex, matchIndex + query.length))
+            }
+
+            currentIndex = matchIndex + query.length
+        }
+    }
+
+    Text(
+        text = annotatedString,
+        style = MaterialTheme.typography.bodySmall,
+        maxLines = 3,
+        overflow = TextOverflow.Ellipsis
+    )
 }
 
 // ---------------------------------------------------------------------------
