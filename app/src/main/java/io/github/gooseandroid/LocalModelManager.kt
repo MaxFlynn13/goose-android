@@ -216,6 +216,18 @@ class LocalModelManager(private val context: Context) {
                     connection.instanceFollowRedirects = false
                     connection.setRequestProperty("User-Agent", "GooseAndroid/0.1.0")
 
+                    // Add HuggingFace auth token for gated models
+                    val hfToken = try {
+                        kotlinx.coroutines.runBlocking {
+                            io.github.gooseandroid.data.SettingsStore(context)
+                                .getString(io.github.gooseandroid.data.SettingsKeys.HUGGINGFACE_TOKEN, "")
+                                .first()
+                        }
+                    } catch (_: Exception) { "" }
+                    if (hfToken.isNotBlank()) {
+                        connection.setRequestProperty("Authorization", "Bearer $hfToken")
+                    }
+
                     // Support resume if temp file exists
                     if (tempFile.exists() && tempFile.length() > 0) {
                         connection.setRequestProperty("Range", "bytes=${tempFile.length()}-")

@@ -623,7 +623,35 @@ fun ConfigureProviderScreen(onBack: () -> Unit, onNavigateToModels: () -> Unit =
                                 }
                             }
 
-                            // Download GGUF Models card
+                            // HuggingFace Token (required for gated models)
+                            item {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                SectionHeader(title = "HuggingFace Token", icon = Icons.Filled.Key)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "Required to download Gemma and Llama models (they are gated on HuggingFace).",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                var hfToken by remember { mutableStateOf("") }
+                                LaunchedEffect(Unit) {
+                                    settingsStore.getString(SettingsKeys.HUGGINGFACE_TOKEN, "").collect { hfToken = it }
+                                }
+                                OutlinedTextField(
+                                    value = hfToken,
+                                    onValueChange = { newVal ->
+                                        hfToken = newVal
+                                        scope.launch { settingsStore.setString(SettingsKeys.HUGGINGFACE_TOKEN, newVal) }
+                                    },
+                                    label = { Text("HuggingFace Token") },
+                                    placeholder = { Text("hf_...") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+
+                            // Download Models card
                             item {
                                 Spacer(modifier = Modifier.height(8.dp))
                                 SectionHeader(title = "Download Models", icon = Icons.Filled.Download)

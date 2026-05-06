@@ -35,6 +35,9 @@ object SettingsKeys {
     // GitHub (used by Git tool and GitHub extension)
     const val GITHUB_TOKEN = "github_token"
 
+    // HuggingFace (for downloading gated models)
+    const val HUGGINGFACE_TOKEN = "huggingface_token"
+
     // Active provider/model selection
     const val ACTIVE_PROVIDER = "active_provider"
     const val ACTIVE_MODEL = "active_model"
