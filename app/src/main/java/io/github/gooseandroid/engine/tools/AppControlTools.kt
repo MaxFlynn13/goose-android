@@ -5,6 +5,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import kotlinx.coroutines.flow.first
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
@@ -232,10 +233,28 @@ class SkillManageTool(private val context: Context) : Tool {
 
     private fun listSkills(): ToolResult {
         val skills = loadSkills()
-        if (skills.length() == 0) {
+        // Also include built-in skills that aren't in the file
+        val builtinSkills = listOf(
+            "builtin-summarize" to "Summarize",
+            "builtin-code-review" to "Code Review",
+            "builtin-explain-code" to "Explain Code",
+            "builtin-debug-helper" to "Debug Helper",
+            "builtin-write-tests" to "Write Tests",
+            "builtin-brainstorm" to "Brainstorm",
+            "builtin-translate" to "Translate",
+            "builtin-refactor" to "Refactor",
+            "builtin-full-diagnostic" to "Full System Diagnostic"
+        )
+        val totalCount = skills.length() + builtinSkills.size
+        if (totalCount == 0) {
             return ToolResult("No skills found. Use action 'create' to add one.")
         }
-        val sb = StringBuilder("Skills (${skills.length()}):\n\n")
+        val sb = StringBuilder("Skills ($totalCount):\n\n")
+        // Built-in skills first
+        for ((id, name) in builtinSkills) {
+            sb.append("• [$id] $name (built-in)\n")
+        }
+        if (skills.length() > 0) sb.append("\nUser-created:\n")
         for (i in 0 until skills.length()) {
             val skill = skills.getJSONObject(i)
             sb.appendLine("- **${skill.optString("name")}** (id: ${skill.optString("id")})")
@@ -1454,5 +1473,202 @@ class ScheduleTool(private val context: Context) : Tool {
             }
         }
         return ToolResult("Error: Task with id '$id' not found", isError = true)
+    }
+}
+
+/**
+ * App Introspection Tool — gives Goose full read/write access to its own configuration.
+ * 
+ * Actions:
+ * - get_setting: Read any app setting by key
+ * - set_setting: Write any app setting by key
+ * - list_settings: List all available setting keys and their current values
+ * - get_status: Get current engine status, active provider, model, workspace info
+ * - list_tools: List all registered tools and their descriptions
+ * - list_extensions: List all extensions and their enabled status
+ * - get_workspace_info: Get workspace directory info (size, files, quota)
+ */
+class AppIntrospectionTool(private val context: Context) : Tool {
+    companion object {
+        private const val TAG = "AppIntrospection"
+    }
+
+    override val name = "app_control"
+    override val description = "Read and modify Goose app settings, check status, list capabilities"
+
+    override fun getSchema(): JSONObject = functionSchema(
+        name = name,
+        description = description,
+        properties = JSONObject().apply {
+            put("action", JSONObject().apply {
+                put("type", "string")
+                put("enum", org.json.JSONArray(listOf(
+                    "get_setting", "set_setting", "list_settings",
+                    "get_status", "list_tools", "list_extensions", "get_workspace_info"
+                )))
+                put("description", "Action to perform")
+            })
+            put("key", JSONObject().apply {
+                put("type", "string")
+                put("description", "Setting key (for get_setting/set_setting)")
+            })
+            put("value", JSONObject().apply {
+                put("type", "string")
+                put("description", "Value to set (for set_setting)")
+            })
+        },
+        required = listOf("action")
+    )
+
+    override suspend fun execute(input: JSONObject): ToolResult {
+        val action = input.optString("action", "")
+        return when (action) {
+            "get_setting" -> getSetting(input.optString("key", ""))
+            "set_setting" -> setSetting(input.optString("key", ""), input.optString("value", ""))
+            "list_settings" -> listSettings()
+            "get_status" -> getStatus()
+            "list_tools" -> listTools()
+            "list_extensions" -> listExtensions()
+            "get_workspace_info" -> getWorkspaceInfo()
+            else -> ToolResult("Unknown action: $action. Use: get_setting, set_setting, list_settings, get_status, list_tools, list_extensions, get_workspace_info", isError = true)
+        }
+    }
+
+    private suspend fun getSetting(key: String): ToolResult {
+        if (key.isBlank()) return ToolResult("Missing 'key' argument", isError = true)
+        val store = io.github.gooseandroid.data.SettingsStore(context)
+        val value = try {
+            store.getString(key, "").first()
+        } catch (e: Exception) { "" }
+        return if (value.isNotBlank()) {
+            ToolResult("$key = $value")
+        } else {
+            ToolResult("$key is not set (empty)")
+        }
+    }
+
+    private suspend fun setSetting(key: String, value: String): ToolResult {
+        if (key.isBlank()) return ToolResult("Missing 'key' argument", isError = true)
+        val store = io.github.gooseandroid.data.SettingsStore(context)
+        store.setString(key, value)
+        return ToolResult("Set $key = $value")
+    }
+
+    private suspend fun listSettings(): ToolResult {
+        val store = io.github.gooseandroid.data.SettingsStore(context)
+        val keys = listOf(
+            "active_provider", "active_model", "theme_mode", "primary_color", "text_scale",
+            "anthropic_api_key", "openai_api_key", "google_api_key", "mistral_api_key",
+            "openrouter_api_key", "databricks_api_key", "github_token",
+            "ollama_base_url", "databricks_workspace_url",
+            "extension_developer", "extension_memory", "local_model_id",
+            "auto_compact"
+        )
+        val sb = StringBuilder("App Settings:\n\n")
+        for (key in keys) {
+            val value = try {
+                store.getString(key, "").first()
+            } catch (e: Exception) { "" }
+            val display = if (key.contains("key") || key.contains("token")) {
+                if (value.isNotBlank()) "${value.take(8)}..." else "(not set)"
+            } else {
+                value.ifBlank { "(not set)" }
+            }
+            sb.append("• $key: $display\n")
+        }
+        return ToolResult(sb.toString())
+    }
+
+    private fun getStatus(): ToolResult {
+        val workspace = File(context.filesDir, "workspace")
+        val sb = StringBuilder("Goose Engine Status:\n\n")
+        sb.append("• Engine: Kotlin Native (active)\n")
+        sb.append("• Workspace: ${workspace.absolutePath}\n")
+        sb.append("• Workspace exists: ${workspace.exists()}\n")
+        sb.append("• App version: ${context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown"}\n")
+        sb.append("• Android API: ${android.os.Build.VERSION.SDK_INT}\n")
+        sb.append("• Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\n")
+        sb.append("• RAM: ${Runtime.getRuntime().maxMemory() / 1024 / 1024}MB max, ${Runtime.getRuntime().freeMemory() / 1024 / 1024}MB free\n")
+        return ToolResult(sb.toString())
+    }
+
+    private fun listTools(): ToolResult {
+        val tools = listOf(
+            "shell" to "Execute shell commands",
+            "write" to "Create/overwrite files",
+            "edit" to "Find-and-replace in files",
+            "tree" to "List directory structure",
+            "git" to "Git operations (clone, commit, push, pull, branch, merge)",
+            "python" to "Execute Python 3.11 code (Chaquopy)",
+            "manage_skills" to "CRUD on skills/recipes",
+            "manage_extensions" to "CRUD on MCP extensions",
+            "manage_brain" to "CRUD on brain knowledge nodes",
+            "manage_projects" to "CRUD on projects",
+            "schedule_task" to "CRUD on scheduled tasks",
+            "app_control" to "Read/write app settings and status",
+            "search_repositories" to "GitHub: search repos",
+            "get_file_contents" to "GitHub: read file from repo",
+            "create_issue" to "GitHub: create issue",
+            "web_search" to "Search the web (DuckDuckGo)",
+            "fetch" to "HTTP GET any URL"
+        )
+        val sb = StringBuilder("Available Tools (${tools.size}):\n\n")
+        for ((name, desc) in tools) {
+            sb.append("• $name — $desc\n")
+        }
+        return ToolResult(sb.toString())
+    }
+
+    private fun listExtensions(): ToolResult {
+        val configFile = File(context.filesDir, "mcp_extensions.json")
+        val sb = StringBuilder("Extensions:\n\n")
+        sb.append("Built-in (always available):\n")
+        sb.append("• GitHub (native Kotlin) — search repos, manage issues/PRs\n")
+        sb.append("• Web Search (native Kotlin) — DuckDuckGo search\n")
+        sb.append("• HTTP Fetch (native Kotlin) — fetch any URL\n\n")
+
+        if (configFile.exists()) {
+            try {
+                val configs = org.json.JSONArray(configFile.readText().let {
+                    org.json.JSONObject(it).optJSONArray("extensions") ?: org.json.JSONArray()
+                })
+                if (configs.length() > 0) {
+                    sb.append("Configured MCP Extensions:\n")
+                    for (i in 0 until configs.length()) {
+                        val cfg = configs.getJSONObject(i)
+                        val name = cfg.optString("name", "unknown")
+                        val enabled = cfg.optBoolean("enabled", false)
+                        sb.append("• $name: ${if (enabled) "enabled" else "disabled"}\n")
+                    }
+                }
+            } catch (e: Exception) {
+                sb.append("(Error reading extension config: ${e.message})\n")
+            }
+        } else {
+            sb.append("No MCP extensions configured.\n")
+        }
+        return ToolResult(sb.toString())
+    }
+
+    private fun getWorkspaceInfo(): ToolResult {
+        val workspace = File(context.filesDir, "workspace")
+        if (!workspace.exists()) return ToolResult("Workspace directory does not exist")
+
+        val files = workspace.walkTopDown().filter { it.isFile }.toList()
+        val totalSize = files.sumOf { it.length() }
+        val dirs = workspace.walkTopDown().filter { it.isDirectory }.count() - 1
+
+        val sb = StringBuilder("Workspace Info:\n\n")
+        sb.append("• Path: ${workspace.absolutePath}\n")
+        sb.append("• Total files: ${files.size}\n")
+        sb.append("• Total directories: $dirs\n")
+        sb.append("• Total size: ${totalSize / 1024}KB (${totalSize / 1024 / 1024}MB)\n\n")
+        sb.append("Top-level contents:\n")
+        workspace.listFiles()?.sortedBy { it.name }?.forEach { f ->
+            val indicator = if (f.isDirectory) "/" else ""
+            val size = if (f.isFile) " (${f.length() / 1024}KB)" else ""
+            sb.append("  ${f.name}$indicator$size\n")
+        }
+        return ToolResult(sb.toString())
     }
 }

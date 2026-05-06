@@ -18,7 +18,8 @@ class ToolRouter(
     workspaceDir: File,
     shellEnv: Map<String, String> = emptyMap(),
     context: Context? = null,
-    gitToken: String = ""
+    gitToken: String = "",
+    gitTokenProvider: (() -> String)? = null
 ) {
 
     private val tools = mutableMapOf<String, Tool>()
@@ -29,7 +30,7 @@ class ToolRouter(
         register(FileWriteTool(workspaceDir))
         register(FileEditTool(workspaceDir))
         register(TreeTool(workspaceDir))
-        register(GitTool(workspaceDir, gitToken).AsRegisteredTool())
+        register(GitTool(workspaceDir, gitToken, gitTokenProvider).AsRegisteredTool())
 
         // Python tool (Chaquopy embedded CPython)
         context?.let { ctx ->
@@ -47,6 +48,7 @@ class ToolRouter(
             register(BrainManageTool(it))
             register(ProjectManageTool(it))
             register(ScheduleTool(it))
+            register(AppIntrospectionTool(it))
         }
     }
 

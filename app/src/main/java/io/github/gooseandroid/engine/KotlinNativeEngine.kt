@@ -49,7 +49,14 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             settingsStore.getString(SettingsKeys.GITHUB_TOKEN, "").first()
         }
     } catch (e: Exception) { "" }
-    private val toolRouter = ToolRouter(workspaceDir, shellEnv, context, gitToken)
+    private val toolRouter = ToolRouter(workspaceDir, shellEnv, context, gitToken, gitTokenProvider = {
+        // Dynamic token provider — reads fresh from DataStore on each git operation
+        try {
+            kotlinx.coroutines.runBlocking {
+                settingsStore.getString(SettingsKeys.GITHUB_TOKEN, "").first()
+            }
+        } catch (e: Exception) { "" }
+    })
     private val mcpManager = McpExtensionManager()
     private val extensionRegistry = io.github.gooseandroid.engine.extensions.BuiltInExtensionRegistry(context)
     val permissionManager = PermissionManager()

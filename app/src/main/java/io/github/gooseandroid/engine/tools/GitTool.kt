@@ -24,7 +24,18 @@ import java.io.File
  * This gives the AI full git capabilities on Android without
  * needing a native git binary or Termux.
  */
-class GitTool(private val workingDir: File, private val defaultToken: String = "") {
+class GitTool(
+    private val workingDir: File,
+    private val defaultToken: String = "",
+    private val tokenProvider: (() -> String)? = null
+) {
+    /** Get the best available token: explicit arg > dynamic provider > static default */
+    private fun resolveToken(explicitToken: String): String {
+        if (explicitToken.isNotBlank()) return explicitToken
+        val dynamic = tokenProvider?.invoke() ?: ""
+        if (dynamic.isNotBlank()) return dynamic
+        return defaultToken
+    }
 
     companion object {
         private const val TAG = "GitTool"
@@ -107,7 +118,7 @@ class GitTool(private val workingDir: File, private val defaultToken: String = "
         if (depth > 0) cloneCommand.setDepth(depth)
 
         // Add credentials — JGit requires a CredentialsProvider even for public repos
-        val token = args.optString("token", "").ifBlank { defaultToken }.ifBlank { defaultToken }
+        val token = resolveToken(args.optString("token", ""))
         cloneCommand.setCredentialsProvider(
             UsernamePasswordCredentialsProvider(token, "")
         )
@@ -196,7 +207,7 @@ class GitTool(private val workingDir: File, private val defaultToken: String = "
         val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val remote = args.optString("remote", "origin")
         val branch = args.optString("branch", "")
-        val token = args.optString("token", "").ifBlank { defaultToken }
+        val token = resolveToken(args.optString("token", ""))
 
         val pushCommand = git.push().setRemote(remote)
         if (branch.isNotBlank()) pushCommand.add(branch)
@@ -219,7 +230,7 @@ class GitTool(private val workingDir: File, private val defaultToken: String = "
     private fun pull(args: JSONObject, repoDir: File): ToolResult {
         val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val remote = args.optString("remote", "origin")
-        val token = args.optString("token", "").ifBlank { defaultToken }
+        val token = resolveToken(args.optString("token", ""))
 
         val pullCommand = git.pull().setRemote(remote)
         if (token.isNotBlank()) {
