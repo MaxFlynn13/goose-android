@@ -7,9 +7,6 @@ import io.github.gooseandroid.engine.providers.LlmProvider
 import io.github.gooseandroid.engine.providers.LlmToolCall
 import io.github.gooseandroid.engine.providers.StreamEvent
 import io.github.gooseandroid.engine.tools.ToolRouter
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -302,33 +299,33 @@ The working directory is the user's project workspace.
                     contextTracker?.let { trackToolExecution(it, toolCall, result.output, result.isError) }
                 }
             } else {
-                // Multiple tool calls — execute in parallel using coroutineScope
-                data class ToolResult(val toolCall: LlmToolCall, val output: String, val isError: Boolean)
+                // Multiple tool calls — execute sequentially
+                // (parallel execution in flow builders requires complex scoping;
+                //  sequential is simpler and equally correct)
+                for (toolCall in turnToolCalls) {
+                    currentCoroutineContext().ensureActive()
 
-                val parallelResults = coroutineScope {
-                    turnToolCalls.map { toolCall ->
-                        async {
-                            val allowed = permissionManager?.checkPermission(toolCall.name, toolCall.input) ?: true
-                            if (!allowed) {
-                                ToolResult(toolCall, "Operation denied by user.", true)
-                            } else {
-                                val result = executeTool(toolCall)
-                                ToolResult(toolCall, result.output, result.isError)
-                            }
-                        }
-                    .awaitAll()
-                }
+                    val allowed = permissionManager?.checkPermission(toolCall.name, toolCall.input) ?: true
+                    if (!allowed) {
+                        emit(AgentEvent.ToolStart(toolCall.id, toolCall.name, toolCall.input.toString()))
+                        emit(AgentEvent.ToolEnd(toolCall.id, toolCall.name, "Operation denied by user.", true))
+                        messages.add(ConversationMessage(
+                            role = "tool", content = "Operation denied by user.",
+                            toolCallId = toolCall.id, toolName = toolCall.name
+                        ))
+                        continue
+                    }
 
-                for (tr in parallelResults) {
-                    emit(AgentEvent.ToolStart(tr.toolCall.id, tr.toolCall.name, tr.toolCall.input.toString()))
-                    emit(AgentEvent.ToolEnd(tr.toolCall.id, tr.toolCall.name, tr.output, tr.isError))
+                    Log.i(TAG, "Executing tool: ${toolCall.name} (id=${toolCall.id})")
+                    emit(AgentEvent.ToolStart(toolCall.id, toolCall.name, toolCall.input.toString()))
+
+                    val result = executeTool(toolCall)
+                    emit(AgentEvent.ToolEnd(toolCall.id, toolCall.name, result.output, result.isError))
                     messages.add(ConversationMessage(
-                        role = "tool",
-                        content = tr.output,
-                        toolCallId = tr.toolCall.id,
-                        toolName = tr.toolCall.name
+                        role = "tool", content = result.output,
+                        toolCallId = toolCall.id, toolName = toolCall.name
                     ))
-                    contextTracker?.let { trackToolExecution(it, tr.toolCall, tr.output, tr.isError) }
+                    contextTracker?.let { trackToolExecution(it, toolCall, result.output, result.isError) }
                 }
             }
 
