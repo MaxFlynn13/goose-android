@@ -17,7 +17,8 @@ import java.io.File
 class ToolRouter(
     workspaceDir: File,
     shellEnv: Map<String, String> = emptyMap(),
-    context: Context? = null
+    context: Context? = null,
+    gitToken: String = ""
 ) {
 
     private val tools = mutableMapOf<String, Tool>()
@@ -28,7 +29,7 @@ class ToolRouter(
         register(FileWriteTool(workspaceDir))
         register(FileEditTool(workspaceDir))
         register(TreeTool(workspaceDir))
-        register(GitTool(workspaceDir).AsRegisteredTool())
+        register(GitTool(workspaceDir, gitToken).AsRegisteredTool())
 
         // Python tool (Chaquopy embedded CPython)
         context?.let { ctx ->

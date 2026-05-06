@@ -44,7 +44,12 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
     private val workspaceDir = File(context.filesDir, "workspace").apply { mkdirs() }
     private val runtimeManager = io.github.gooseandroid.runtime.RuntimeManager(context)
     private val shellEnv = buildShellEnvironment()
-    private val toolRouter = ToolRouter(workspaceDir, shellEnv, context)
+    private val gitToken: String = try {
+        kotlinx.coroutines.runBlocking {
+            settingsStore.getString(SettingsKeys.GITHUB_TOKEN, "").first()
+        }
+    } catch (e: Exception) { "" }
+    private val toolRouter = ToolRouter(workspaceDir, shellEnv, context, gitToken)
     private val mcpManager = McpExtensionManager()
     private val extensionRegistry = io.github.gooseandroid.engine.extensions.BuiltInExtensionRegistry(context)
     val permissionManager = PermissionManager()

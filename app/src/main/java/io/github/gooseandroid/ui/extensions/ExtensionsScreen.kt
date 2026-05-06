@@ -443,6 +443,12 @@ fun ExtensionsScreen(onBack: () -> Unit) {
                         val updated = current.extensions.filter { it.id != preconfig.id } + newConfig
                         saveMcpConfigs(context, McpExtensionsFile(updated))
                         userExtensions = updated
+
+                        // Also persist the GitHub token to SettingsStore for Git tool + GitHub extension
+                        val ghToken = envVars["GITHUB_PERSONAL_ACCESS_TOKEN"]
+                        if (!ghToken.isNullOrBlank()) {
+                            settingsStore.setString(SettingsKeys.GITHUB_TOKEN, ghToken)
+                        }
                     }
                     extensionStatuses[preconfig.id] = ExtensionStatus.CONNECTED
                     preconfiguredSetupTarget = null

@@ -32,6 +32,9 @@ object SettingsKeys {
     const val DATABRICKS_API_KEY = "databricks_api_key"
     const val DATABRICKS_WORKSPACE_URL = "databricks_workspace_url"
 
+    // GitHub (used by Git tool and GitHub extension)
+    const val GITHUB_TOKEN = "github_token"
+
     // Active provider/model selection
     const val ACTIVE_PROVIDER = "active_provider"
     const val ACTIVE_MODEL = "active_model"

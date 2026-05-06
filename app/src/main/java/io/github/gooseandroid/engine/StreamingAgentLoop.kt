@@ -370,6 +370,10 @@ You are running on an Android device as a native Kotlin application.
                 }
             }
 
+            // Reset accumulated text so the NEXT turn starts a fresh bubble.
+            // Without this, post-tool responses would include all pre-tool text.
+            globalAccumulatedText.clear()
+
             // Loop back — the LLM will see tool results and stream its next response
         }
 

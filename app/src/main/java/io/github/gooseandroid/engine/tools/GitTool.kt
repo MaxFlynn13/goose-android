@@ -24,7 +24,7 @@ import java.io.File
  * This gives the AI full git capabilities on Android without
  * needing a native git binary or Termux.
  */
-class GitTool(private val workingDir: File) {
+class GitTool(private val workingDir: File, private val defaultToken: String = "") {
 
     companion object {
         private const val TAG = "GitTool"
@@ -107,17 +107,10 @@ class GitTool(private val workingDir: File) {
         if (depth > 0) cloneCommand.setDepth(depth)
 
         // Add credentials — JGit requires a CredentialsProvider even for public repos
-        val token = args.optString("token", "")
-        if (token.isNotBlank()) {
-            cloneCommand.setCredentialsProvider(
-                UsernamePasswordCredentialsProvider(token, "")
-            )
-        } else {
-            // Anonymous access: provide empty credentials for public repos
-            cloneCommand.setCredentialsProvider(
-                UsernamePasswordCredentialsProvider("", "")
-            )
-        }
+        val token = args.optString("token", "").ifBlank { defaultToken }.ifBlank { defaultToken }
+        cloneCommand.setCredentialsProvider(
+            UsernamePasswordCredentialsProvider(token, "")
+        )
 
         val git = cloneCommand.call()
         val head = git.repository.resolve("HEAD")
@@ -203,7 +196,7 @@ class GitTool(private val workingDir: File) {
         val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val remote = args.optString("remote", "origin")
         val branch = args.optString("branch", "")
-        val token = args.optString("token", "")
+        val token = args.optString("token", "").ifBlank { defaultToken }
 
         val pushCommand = git.push().setRemote(remote)
         if (branch.isNotBlank()) pushCommand.add(branch)
@@ -226,7 +219,7 @@ class GitTool(private val workingDir: File) {
     private fun pull(args: JSONObject, repoDir: File): ToolResult {
         val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val remote = args.optString("remote", "origin")
-        val token = args.optString("token", "")
+        val token = args.optString("token", "").ifBlank { defaultToken }
 
         val pullCommand = git.pull().setRemote(remote)
         if (token.isNotBlank()) {
