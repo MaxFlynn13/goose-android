@@ -58,50 +58,36 @@ class RuntimePackManager(private val context: Context) {
          * The Termux bootstrap is the most reliable option — it's been tested
          * on thousands of Android devices for years.
          */
+        /**
+         * Runtime packs.
+         *
+         * IMPORTANT: Standard Linux binaries (linux-gnu) do NOT work on Android.
+         * Android uses bionic libc, not glibc. Only Termux-compiled binaries work.
+         *
+         * The Termux bootstrap is the ONLY reliable way to get Node/Python/Git
+         * running on Android. It includes a patched linker and all shared libraries.
+         *
+         * Standalone Node/Python downloads are disabled because they will download
+         * but fail to execute on Android's bionic libc.
+         */
         val PACKS = listOf(
             RuntimePack(
                 id = "termux",
-                name = "Developer Environment",
-                description = "Full development tools: Node.js, Python, Git, SSH, curl, and 1000+ packages. " +
-                    "This is the recommended way to get all tools working on Android.",
+                name = "Developer Environment (Termux)",
+                description = "Full development tools compiled for Android: Node.js, Python, Git, SSH, " +
+                    "curl, and 1000+ packages. This is the ONLY way to get full dev tools on Android " +
+                    "because standard Linux binaries don't work on Android's bionic libc.",
                 sizeDescription = "~80MB download, ~250MB installed",
-                // Termux's official bootstrap archive for aarch64
+                // Termux's official bootstrap for aarch64 — compiled for Android's bionic
                 downloadUrl = "https://github.com/nicoulaj/nicoulaj.github.io/releases/download/termux-bootstrap-v1/bootstrap-aarch64.zip",
                 extractedDirName = "usr",
                 binaries = listOf(
                     "node", "npm", "npx", "python3", "pip3",
                     "git", "ssh", "scp", "curl", "wget",
-                    "gcc", "g++", "make", "cmake",
-                    "vim", "nano", "tar", "gzip", "find",
-                    "grep", "awk", "sed", "bash", "zsh",
-                    "jq", "ripgrep", "fd", "tmux"
+                    "bash", "zsh", "tar", "gzip", "find",
+                    "grep", "awk", "sed", "jq"
                 ),
                 version = "2024.1"
-            ),
-            RuntimePack(
-                id = "nodejs",
-                name = "Node.js 22 (Standalone)",
-                description = "JavaScript runtime only. For MCP extensions that use npx. " +
-                    "Install the Developer Environment instead for a complete setup.",
-                sizeDescription = "~55MB download",
-                // Node.js official provides linux-arm64 builds — these work on Android
-                // via Termux's linker or with the right LD_LIBRARY_PATH
-                downloadUrl = "https://nodejs.org/dist/v22.15.0/node-v22.15.0-linux-arm64.tar.gz",
-                extractedDirName = "node-v22.15.0-linux-arm64",
-                binaries = listOf("node", "npm", "npx"),
-                version = "22.15.0"
-            ),
-            RuntimePack(
-                id = "python",
-                name = "Python 3.12 (Standalone)",
-                description = "Python runtime only. For Python-based MCP extensions and scripts. " +
-                    "Install the Developer Environment instead for a complete setup.",
-                sizeDescription = "~45MB download",
-                // python-build-standalone provides static builds
-                downloadUrl = "https://github.com/indygreg/python-build-standalone/releases/download/20240415/cpython-3.12.3+20240415-aarch64-unknown-linux-gnu-install_only.tar.gz",
-                extractedDirName = "python",
-                binaries = listOf("python3", "python3.12", "pip3"),
-                version = "3.12.3"
             )
         )
     }

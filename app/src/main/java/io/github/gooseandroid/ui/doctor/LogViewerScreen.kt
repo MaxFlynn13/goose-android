@@ -188,7 +188,7 @@ private fun ProcessStatusBar(isRunning: Boolean) {
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isRunning) "Goose process running" else "Goose process stopped",
+                text = if (isRunning) "Goose engine active" else "Goose engine idle",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

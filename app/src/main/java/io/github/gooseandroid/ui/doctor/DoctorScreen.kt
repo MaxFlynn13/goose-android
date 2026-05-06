@@ -59,8 +59,8 @@ fun DoctorScreen(onBack: () -> Unit) {
         scope.launch {
             isRunning = true
             checks = listOf(
-                DoctorCheck("goose_binary", "Goose Binary", CheckStatus.RUNNING),
-                DoctorCheck("goose_server", "Goose Server", CheckStatus.RUNNING),
+                DoctorCheck("goose_binary", "Kotlin Engine", CheckStatus.RUNNING),
+                DoctorCheck("goose_server", "Goose Engine", CheckStatus.RUNNING),
                 DoctorCheck("internet", "Internet Connection", CheckStatus.RUNNING),
                 DoctorCheck("storage", "Storage Space", CheckStatus.RUNNING),
                 DoctorCheck("ram", "RAM Available", CheckStatus.RUNNING),
@@ -69,18 +69,11 @@ fun DoctorScreen(onBack: () -> Unit) {
                 DoctorCheck("extensions", "Extensions", CheckStatus.RUNNING)
             )
 
-            // Goose Binary
-            val binaryCheck = withContext(Dispatchers.IO) {
-                val nativeLibDir = context.applicationInfo.nativeLibraryDir
-                val libFile = File(nativeLibDir, "libgoose.so")
-                if (libFile.exists() && libFile.canExecute()) {
-                    DoctorCheck("goose_binary", "Goose Binary", CheckStatus.PASS, "libgoose.so found at $nativeLibDir")
-                } else if (libFile.exists()) {
-                    DoctorCheck("goose_binary", "Goose Binary", CheckStatus.WARN, "libgoose.so exists but not executable")
-                } else {
-                    DoctorCheck("goose_binary", "Goose Binary", CheckStatus.FAIL, "libgoose.so not found in $nativeLibDir")
-                }
-            }
+            // Kotlin Engine — always available (no binary dependency)
+            val binaryCheck = DoctorCheck(
+                "goose_binary", "Kotlin Engine", CheckStatus.PASS,
+                "Native Kotlin engine active — no binary dependency"
+            )
             checks = checks.map { if (it.id == "goose_binary") binaryCheck else it }
 
             // Goose Engine — Kotlin native engine (always available)

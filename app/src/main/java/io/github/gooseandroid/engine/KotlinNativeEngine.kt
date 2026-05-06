@@ -72,6 +72,15 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
 
         _status.value = EngineStatus.CONNECTED
         Log.i(TAG, "Kotlin native engine ready. Tools: ${toolRouter.getToolNames().joinToString()}")
+
+        // Update log viewer status
+        try {
+            io.github.gooseandroid.ui.doctor.LogCollector.setProcessRunning(true)
+            io.github.gooseandroid.ui.doctor.LogCollector.addLine("Kotlin native engine initialized")
+            io.github.gooseandroid.ui.doctor.LogCollector.addLine("Provider: ${currentProvider?.providerId ?: "none"}")
+            io.github.gooseandroid.ui.doctor.LogCollector.addLine("Tools: ${toolRouter.getToolNames().joinToString()}")
+        } catch (_: Exception) {}
+
         return true
     }
 

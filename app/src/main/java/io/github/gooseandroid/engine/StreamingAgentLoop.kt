@@ -7,10 +7,12 @@ import io.github.gooseandroid.engine.providers.LlmProvider
 import io.github.gooseandroid.engine.providers.LlmToolCall
 import io.github.gooseandroid.engine.providers.StreamEvent
 import io.github.gooseandroid.engine.tools.ToolRouter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import org.json.JSONObject
 
 /**
@@ -345,7 +347,7 @@ The working directory is the user's project workspace.
                 "The task may be too complex for a single interaction."
             )
         )
-    }
+    }.flowOn(Dispatchers.IO)  // ALL network I/O runs off the main thread
 
     // ── Private helpers ─────────────────────────────────────────────────────
 
