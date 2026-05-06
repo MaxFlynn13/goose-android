@@ -83,8 +83,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     // MediaPipe LLM Inference — Google's production on-device LLM API
-    // NOTE: Commented out until we verify the exact artifact version available
-    // The LocalModelProvider uses reflection to load MediaPipe if present,
-    // so the app builds and runs without it (graceful degradation)
-    // implementation("com.google.mediapipe:tasks-genai:0.10.14")
+    // Used for on-device GGUF model inference (same as Google AI Edge Gallery)
+    implementation("com.google.mediapipe:tasks-genai:0.10.14")
 }
