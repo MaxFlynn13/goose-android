@@ -94,8 +94,11 @@ fun ModelsScreen(
                     onDelete = { modelManager.deleteModel(it.id) },
                     onSelect = {
                         scope.launch {
+                            // Set BOTH provider and model so the engine uses this local model
+                            settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, "local")
+                            settingsStore.setString(SettingsKeys.ACTIVE_MODEL, it.id)
                             settingsStore.setString(SettingsKeys.LOCAL_MODEL_ID, it.id)
-                            Toast.makeText(context, "${it.name} selected", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "${it.name} activated as local model", Toast.LENGTH_SHORT).show()
                         }
                     }
                 )
@@ -125,8 +128,10 @@ fun ModelsScreen(
                         onDelete = { modelManager.deleteModel(it.id) },
                         onSelect = {
                             scope.launch {
+                                settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, "local")
+                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, it.id)
                                 settingsStore.setString(SettingsKeys.LOCAL_MODEL_ID, it.id)
-                                Toast.makeText(context, "${it.name} selected", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "${it.name} activated as local model", Toast.LENGTH_SHORT).show()
                             }
                         }
                     )
