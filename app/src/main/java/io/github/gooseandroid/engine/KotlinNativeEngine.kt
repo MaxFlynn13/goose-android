@@ -2,6 +2,7 @@ package io.github.gooseandroid.engine
 
 import android.content.Context
 import android.util.Log
+import io.github.gooseandroid.LocalModelManager
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
 import io.github.gooseandroid.engine.mcp.McpExtensionManager
@@ -44,6 +45,8 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
     private val shellEnv = buildShellEnvironment()
     private val toolRouter = ToolRouter(workspaceDir, shellEnv, context)
     private val mcpManager = McpExtensionManager()
+    val permissionManager = PermissionManager()
+    private val contextTracker = ContextTracker()
 
     private var currentProvider: LlmProvider? = null
     private var currentJob: Job? = null
@@ -87,7 +90,7 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
         }
 
         // Create a FRESH agent loop for each message — never reuse stale state
-        val loop = StreamingAgentLoop(provider, toolRouter, mcpManager)
+        val loop = StreamingAgentLoop(provider, toolRouter, mcpManager, permissionManager, contextTracker)
 
         // Run the agent loop and emit all events
         try {
@@ -139,6 +142,25 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
                 return@withContext false
             }
 
+            // Handle local model provider specially
+            if (providerId == "local") {
+                val localProvider = createLocalProvider(modelId)
+                if (localProvider != null) {
+                    currentProvider = localProvider
+                    Log.i(TAG, "Local provider ready: $modelId")
+                    return@withContext true
+                }
+                // Local model not available — try fallback to cloud provider
+                Log.w(TAG, "Local model not available, trying fallback")
+                val fallback = findFirstConfiguredProvider()
+                if (fallback != null) {
+                    currentProvider = fallback
+                    return@withContext true
+                }
+                currentProvider = null
+                return@withContext false
+            }
+
             val apiKey = getApiKeyForProvider(providerId)
             if (apiKey.isBlank() && providerId != "ollama") {
                 Log.w(TAG, "No API key for provider: $providerId")
@@ -152,9 +174,9 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
                 return@withContext false
             }
 
-            val provider = ProviderFactory.create(providerId, apiKey, modelId)
+            val provider = ProviderFactory.create(providerId, apiKey, modelId, context = context)
             if (provider == null) {
-                Log.w(TAG, "Provider '$providerId' not supported or is local-only")
+                Log.w(TAG, "Provider '$providerId' not supported or failed to create")
                 // Try fallback
                 val fallback = findFirstConfiguredProvider()
                 if (fallback != null) {
@@ -171,6 +193,53 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             Log.e(TAG, "Failed to refresh provider", e)
             currentProvider = null
             return@withContext false
+        }
+    }
+
+    /**
+     * Create a LocalModelProvider by reading the selected model ID from settings
+     * and resolving the model file path via LocalModelManager.
+     */
+    private suspend fun createLocalProvider(activeModelId: String): LlmProvider? {
+        try {
+            // Read the local model ID from settings (may differ from ACTIVE_MODEL)
+            val localModelId = try {
+                settingsStore.getString(SettingsKeys.LOCAL_MODEL_ID, "").first()
+            } catch (_: Exception) { "" }
+
+            // Use localModelId if set, otherwise fall back to activeModelId
+            val modelId = localModelId.ifBlank { activeModelId }
+            if (modelId.isBlank()) {
+                Log.w(TAG, "No local model ID configured")
+                return null
+            }
+
+            // Find the model in the catalog and resolve its file path
+            val localModelManager = LocalModelManager(context)
+            val modelInfo = LocalModelManager.MODEL_CATALOG.find { it.id == modelId }
+            if (modelInfo == null) {
+                Log.w(TAG, "Local model '$modelId' not found in catalog")
+                return null
+            }
+
+            val modelFile = localModelManager.getModelFile(modelInfo)
+            if (!modelFile.exists()) {
+                Log.w(TAG, "Local model file not downloaded: ${modelFile.absolutePath}")
+                // Still create the provider — it will show a helpful error message
+            }
+
+            val modelFilePath = modelFile.absolutePath
+            Log.i(TAG, "Creating LocalModelProvider: model=$modelId, path=$modelFilePath")
+
+            return ProviderFactory.create(
+                providerId = "local",
+                apiKey = modelFilePath, // file path passed via apiKey parameter
+                modelId = modelId,
+                context = context
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create local provider", e)
+            return null
         }
     }
 

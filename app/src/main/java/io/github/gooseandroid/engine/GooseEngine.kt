@@ -2,6 +2,7 @@ package io.github.gooseandroid.engine
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONObject
 
 /**
  * The core interface that both the Rust binary engine and the Kotlin native engine implement.
@@ -79,12 +80,33 @@ sealed class AgentEvent {
 }
 
 /**
+ * Information about a single tool call made by the assistant.
+ * Stored in [ConversationMessage.toolCalls] so that providers can format
+ * the conversation history correctly (each provider needs tool_use/functionCall
+ * blocks in the assistant message).
+ */
+data class ToolCallInfo(
+    val id: String,
+    val name: String,
+    val input: JSONObject
+)
+
+/**
  * A message in the conversation history.
- * Simplified from ChatMessage — just what the engine needs.
+ * Carries all information providers need to format messages correctly:
+ *
+ * - role="system": system prompt, only [content] is used
+ * - role="user": user message, only [content] is used
+ * - role="assistant": assistant response, [content] is the text,
+ *   [toolCalls] contains any tool invocations the assistant made
+ * - role="tool": tool result, [content] is the output,
+ *   [toolCallId] identifies which tool call this responds to,
+ *   [toolName] is the tool that was called
  */
 data class ConversationMessage(
-    val role: String,       // "user", "assistant", "system", "tool"
+    val role: String,                           // "user", "assistant", "system", "tool"
     val content: String,
-    val toolCallId: String? = null,
-    val toolName: String? = null
+    val toolCallId: String? = null,             // For role="tool": which tool call this is a result for
+    val toolName: String? = null,               // For role="tool": the tool name
+    val toolCalls: List<ToolCallInfo>? = null   // For role="assistant": tool calls made
 )

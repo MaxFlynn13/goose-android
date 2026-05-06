@@ -4,6 +4,7 @@ import android.util.Log
 import io.github.gooseandroid.engine.ConversationMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
@@ -20,6 +21,12 @@ import java.util.concurrent.TimeUnit
 /**
  * Anthropic Claude provider implementation with full tool use support.
  * Uses the Messages API with SSE streaming.
+ *
+ * Conversation history format required by Anthropic:
+ * ```
+ * [assistant] → content: [{type: "text", text: "..."}, {type: "tool_use", id: "...", name: "...", input: {...}}]
+ * [user]      → content: [{type: "tool_result", tool_use_id: "...", content: "..."}]
+ * ```
  */
 class AnthropicProvider(
     private val apiKey: String,
@@ -39,6 +46,7 @@ class AnthropicProvider(
         private const val BASE_URL = "https://api.anthropic.com/v1/messages"
         private const val API_VERSION = "2023-06-01"
         private const val MAX_TOKENS = 8192
+        private const val MAX_RETRIES = 3
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
     }
 
@@ -50,19 +58,37 @@ class AnthropicProvider(
             val body = buildRequestBody(messages, tools, stream = false)
             val request = buildRequest(body)
 
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+            var retryCount = 0
+            while (retryCount < MAX_RETRIES) {
+                val response = client.newCall(request).execute()
 
-            if (!response.isSuccessful) {
-                Log.e(TAG, "HTTP ${response.code}: $responseBody")
-                return@withContext LlmResponse(
-                    text = "",
-                    finishReason = "error",
-                    toolCalls = emptyList()
-                )
+                if (response.code == 429) {
+                    val retryAfter = response.header("Retry-After")?.toLongOrNull()
+                        ?: (2L * (retryCount + 1))
+                    Log.w(TAG, "Rate limited. Retrying in ${retryAfter}s (attempt ${retryCount + 1}/$MAX_RETRIES)")
+                    response.close()
+                    delay(retryAfter * 1000)
+                    retryCount++
+                    continue
+                }
+
+                val responseBody = response.body?.string() ?: ""
+
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "HTTP ${response.code}: $responseBody")
+                    return@withContext LlmResponse(
+                        text = "",
+                        finishReason = "error",
+                        toolCalls = emptyList()
+                    )
+                }
+
+                return@withContext parseFullResponse(JSONObject(responseBody))
             }
 
-            parseFullResponse(JSONObject(responseBody))
+            // Exhausted retries
+            Log.e(TAG, "Exhausted $MAX_RETRIES retries due to rate limiting")
+            LlmResponse(text = "", finishReason = "error", toolCalls = emptyList())
         } catch (e: Exception) {
             Log.e(TAG, "Chat error: ${e.message}", e)
             LlmResponse(text = "", finishReason = "error")
@@ -77,7 +103,29 @@ class AnthropicProvider(
             val body = buildRequestBody(messages, tools, stream = true)
             val request = buildRequest(body)
 
-            val response = client.newCall(request).execute()
+            var retryCount = 0
+            var response: okhttp3.Response? = null
+
+            while (retryCount < MAX_RETRIES) {
+                response = client.newCall(request).execute()
+
+                if (response.code == 429) {
+                    val retryAfter = response.header("Retry-After")?.toLongOrNull()
+                        ?: (2L * (retryCount + 1))
+                    Log.w(TAG, "Rate limited on stream. Retrying in ${retryAfter}s (attempt ${retryCount + 1}/$MAX_RETRIES)")
+                    response.close()
+                    delay(retryAfter * 1000)
+                    retryCount++
+                    continue
+                }
+                break
+            }
+
+            if (response == null) {
+                trySend(StreamEvent.Error("Failed to get response after $MAX_RETRIES retries"))
+                close()
+                return@callbackFlow
+            }
 
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string() ?: "Unknown error"
@@ -88,8 +136,8 @@ class AnthropicProvider(
             }
 
             val reader = BufferedReader(InputStreamReader(response.body!!.byteStream()))
-            var fullText = StringBuilder()
-            var thinkingText = StringBuilder()
+            val fullText = StringBuilder()
+            val thinkingText = StringBuilder()
             val toolCalls = mutableListOf<LlmToolCall>()
             val toolInputBuffers = mutableMapOf<Int, StringBuilder>()
             val toolCallIds = mutableMapOf<Int, String>()
@@ -240,6 +288,14 @@ class AnthropicProvider(
         return body.toString()
     }
 
+    /**
+     * Groups conversation messages into the format Anthropic expects:
+     *
+     * - Assistant messages include tool_use content blocks when they have tool calls
+     * - Consecutive tool result messages are grouped into a single user message
+     *   with tool_result content blocks
+     * - The sequence is: [assistant with tool_use blocks] → [user with tool_result blocks]
+     */
     private fun groupMessagesForAnthropic(messages: List<ConversationMessage>): List<JSONObject> {
         val result = mutableListOf<JSONObject>()
 
@@ -265,6 +321,7 @@ class AnthropicProvider(
                     msgObj.put("role", "assistant")
                     val contentArray = JSONArray()
 
+                    // Add text content if present
                     if (msg.content.isNotEmpty()) {
                         val textBlock = JSONObject()
                         textBlock.put("type", "text")
@@ -272,24 +329,47 @@ class AnthropicProvider(
                         contentArray.put(textBlock)
                     }
 
-                    // Look ahead for tool calls that belong to this assistant message
-                    // (They would be encoded as assistant messages with toolName set)
+                    // If this assistant message has associated tool calls, add them
+                    // as tool_use content blocks. This is critical for Anthropic's format:
+                    // the assistant message MUST contain the tool_use blocks that correspond
+                    // to the tool_result blocks in the following user message.
+                    if (msg.toolCalls != null) {
+                        for (tc in msg.toolCalls) {
+                            val toolUseBlock = JSONObject()
+                            toolUseBlock.put("type", "tool_use")
+                            toolUseBlock.put("id", tc.id)
+                            toolUseBlock.put("name", tc.name)
+                            toolUseBlock.put("input", tc.input)
+                            contentArray.put(toolUseBlock)
+                        }
+                    }
+
+                    // Anthropic requires at least one content block in assistant messages
+                    if (contentArray.length() == 0) {
+                        val textBlock = JSONObject()
+                        textBlock.put("type", "text")
+                        textBlock.put("text", " ")
+                        contentArray.put(textBlock)
+                    }
+
                     msgObj.put("content", contentArray)
                     result.add(msgObj)
                 }
 
                 "tool" -> {
-                    // Tool results go in a user message with tool_result content blocks
+                    // Tool results go in a user message with tool_result content blocks.
+                    // Collect all consecutive tool messages into one user message.
                     val msgObj = JSONObject()
                     msgObj.put("role", "user")
                     val contentArray = JSONArray()
+
                     val toolResultBlock = JSONObject()
                     toolResultBlock.put("type", "tool_result")
                     toolResultBlock.put("tool_use_id", msg.toolCallId ?: "")
                     toolResultBlock.put("content", msg.content)
                     contentArray.put(toolResultBlock)
 
-                    // Collect consecutive tool results
+                    // Collect consecutive tool results into the same user message
                     var j = i + 1
                     while (j < messages.size && messages[j].role == "tool") {
                         val nextTool = messages[j]

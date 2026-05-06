@@ -11,11 +11,15 @@ import org.json.JSONObject
 /**
  * MCP (Model Context Protocol) client.
  *
- * Implements the JSON-RPC 2.0 based MCP handshake and tool-calling protocol:
+ * Implements the JSON-RPC 2.0 based MCP handshake and full protocol:
  *   1. `initialize` → server capabilities
  *   2. `notifications/initialized`
  *   3. `tools/list` → discover tools
  *   4. `tools/call` → invoke a tool
+ *   5. `resources/list` → discover resources
+ *   6. `resources/read` → read a resource
+ *   7. `prompts/list` → discover prompts
+ *   8. `prompts/get` → get a prompt
  */
 class McpClient(private val transport: McpTransport) {
 
@@ -122,6 +126,202 @@ class McpClient(private val transport: McpTransport) {
         return McpToolResult(content = text, isError = isError)
     }
 
+    // ── Resources ───────────────────────────────────────────────────────────
+
+    /**
+     * List all resources exposed by the server via `resources/list`.
+     *
+     * Returns an empty list if the server does not support resources or has none.
+     */
+    suspend fun listResources(): Result<List<McpResource>> = runCatching {
+        val response = sendRequest("resources/list", JSONObject())
+
+        // Check for JSON-RPC level error
+        response.optJSONObject("error")?.let { err ->
+            val msg = err.optString("message", "Unknown MCP error")
+            throw McpException("resources/list failed: $msg")
+        }
+
+        val result = response.optJSONObject("result") ?: return@runCatching emptyList()
+        val resourcesArray: JSONArray = result.optJSONArray("resources") ?: return@runCatching emptyList()
+
+        (0 until resourcesArray.length()).map { i ->
+            val obj = resourcesArray.getJSONObject(i)
+            McpResource(
+                uri = obj.getString("uri"),
+                name = obj.optString("name", ""),
+                description = obj.optString("description", null),
+                mimeType = obj.optString("mimeType", null)
+            )
+        }
+    }
+
+    /**
+     * Read the content of a resource by URI via `resources/read`.
+     *
+     * Returns the text content of the resource. For resources with multiple content
+     * parts, they are concatenated with newlines.
+     */
+    suspend fun readResource(uri: String): Result<String> = runCatching {
+        val params = JSONObject().apply {
+            put("uri", uri)
+        }
+        val response = sendRequest("resources/read", params)
+
+        // Check for JSON-RPC level error
+        response.optJSONObject("error")?.let { err ->
+            val msg = err.optString("message", "Unknown MCP error")
+            throw McpException("resources/read failed: $msg")
+        }
+
+        val result = response.optJSONObject("result")
+            ?: throw McpException("resources/read returned no result")
+
+        val contentsArray: JSONArray = result.optJSONArray("contents")
+            ?: throw McpException("resources/read returned no contents")
+
+        (0 until contentsArray.length()).joinToString("\n") { i ->
+            val piece = contentsArray.getJSONObject(i)
+            // MCP resource content can be text or blob (base64)
+            when {
+                piece.has("text") -> piece.getString("text")
+                piece.has("blob") -> piece.getString("blob")
+                else -> piece.toString()
+            }
+        }
+    }
+
+    // ── Prompts ─────────────────────────────────────────────────────────────
+
+    /**
+     * List all prompts exposed by the server via `prompts/list`.
+     *
+     * Returns an empty list if the server does not support prompts or has none.
+     */
+    suspend fun listPrompts(): Result<List<McpPrompt>> = runCatching {
+        val response = sendRequest("prompts/list", JSONObject())
+
+        // Check for JSON-RPC level error
+        response.optJSONObject("error")?.let { err ->
+            val msg = err.optString("message", "Unknown MCP error")
+            throw McpException("prompts/list failed: $msg")
+        }
+
+        val result = response.optJSONObject("result") ?: return@runCatching emptyList()
+        val promptsArray: JSONArray = result.optJSONArray("prompts") ?: return@runCatching emptyList()
+
+        (0 until promptsArray.length()).map { i ->
+            val obj = promptsArray.getJSONObject(i)
+            val argsArray = obj.optJSONArray("arguments")
+            val arguments = if (argsArray != null) {
+                (0 until argsArray.length()).map { j ->
+                    val argObj = argsArray.getJSONObject(j)
+                    McpPromptArgument(
+                        name = argObj.getString("name"),
+                        description = argObj.optString("description", null),
+                        required = argObj.optBoolean("required", false)
+                    )
+                }
+            } else {
+                null
+            }
+
+            McpPrompt(
+                name = obj.getString("name"),
+                description = obj.optString("description", null),
+                arguments = arguments
+            )
+        }
+    }
+
+    /**
+     * Get a prompt from the server via `prompts/get`.
+     *
+     * @param name The prompt name
+     * @param arguments Key-value arguments to fill prompt template variables
+     * @return The rendered prompt text (all message content parts concatenated)
+     */
+    suspend fun getPrompt(name: String, arguments: Map<String, String> = emptyMap()): Result<String> = runCatching {
+        val params = JSONObject().apply {
+            put("name", name)
+            if (arguments.isNotEmpty()) {
+                val argsObj = JSONObject()
+                for ((key, value) in arguments) {
+                    argsObj.put(key, value)
+                }
+                put("arguments", argsObj)
+            }
+        }
+        val response = sendRequest("prompts/get", params)
+
+        // Check for JSON-RPC level error
+        response.optJSONObject("error")?.let { err ->
+            val msg = err.optString("message", "Unknown MCP error")
+            throw McpException("prompts/get failed: $msg")
+        }
+
+        val result = response.optJSONObject("result")
+            ?: throw McpException("prompts/get returned no result")
+
+        val messagesArray: JSONArray = result.optJSONArray("messages")
+            ?: throw McpException("prompts/get returned no messages")
+
+        // Concatenate all message content into a single string.
+        // Each message has a role and content (which can be text or structured).
+        buildString {
+            for (i in 0 until messagesArray.length()) {
+                val message = messagesArray.getJSONObject(i)
+                val role = message.optString("role", "")
+                val content = message.opt("content")
+
+                if (i > 0) append("\n\n")
+
+                if (role.isNotEmpty()) {
+                    append("[$role]\n")
+                }
+
+                when (content) {
+                    is String -> append(content)
+                    is JSONObject -> {
+                        // Structured content with type field
+                        val type = content.optString("type", "text")
+                        when (type) {
+                            "text" -> append(content.optString("text", ""))
+                            "resource" -> {
+                                val resource = content.optJSONObject("resource")
+                                if (resource != null) {
+                                    append(resource.optString("text", resource.toString()))
+                                }
+                            }
+                            else -> append(content.toString())
+                        }
+                    }
+                    is JSONArray -> {
+                        // Array of content parts
+                        for (j in 0 until content.length()) {
+                            val part = content.getJSONObject(j)
+                            val type = part.optString("type", "text")
+                            when (type) {
+                                "text" -> append(part.optString("text", ""))
+                                "resource" -> {
+                                    val resource = part.optJSONObject("resource")
+                                    if (resource != null) {
+                                        append(resource.optString("text", resource.toString()))
+                                    }
+                                }
+                                else -> append(part.toString())
+                            }
+                            if (j < content.length() - 1) append("\n")
+                        }
+                    }
+                    else -> append(content?.toString() ?: "")
+                }
+            }
+        }
+    }
+
+    // ── Lifecycle ───────────────────────────────────────────────────────────
+
     /**
      * Gracefully disconnect: close the transport.
      */
@@ -208,3 +408,36 @@ data class McpToolResult(
     val content: String,
     val isError: Boolean = false
 )
+
+/**
+ * Descriptor for a resource exposed by an MCP server.
+ */
+data class McpResource(
+    val uri: String,
+    val name: String,
+    val description: String?,
+    val mimeType: String?
+)
+
+/**
+ * Descriptor for a prompt exposed by an MCP server.
+ */
+data class McpPrompt(
+    val name: String,
+    val description: String?,
+    val arguments: List<McpPromptArgument>?
+)
+
+/**
+ * A single argument definition for an MCP prompt.
+ */
+data class McpPromptArgument(
+    val name: String,
+    val description: String?,
+    val required: Boolean
+)
+
+/**
+ * Exception type for MCP protocol errors.
+ */
+class McpException(message: String) : Exception(message)

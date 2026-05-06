@@ -31,7 +31,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Singleton that collects log lines from the goose binary process.
- * GooseService calls [addLine] when reading from process stdout/stderr.
+ * The engine calls [addLine] when reading from process stdout/stderr.
  */
 object LogCollector {
     private const val MAX_LINES = 500

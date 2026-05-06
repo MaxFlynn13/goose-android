@@ -137,10 +137,13 @@ The working directory is the user's project workspace.
                 return@flow
             }
 
-            // 5. Record the assistant turn ───────────────────────────────
+            // 5. Record the assistant turn with tool call info ────────────
             messages.add(ConversationMessage(
                 role = "assistant",
-                content = response.text
+                content = response.text,
+                toolCalls = response.toolCalls.map { tc ->
+                    ToolCallInfo(id = tc.id, name = tc.name, input = tc.input)
+                }
             ))
 
             // 6. Execute each tool call ──────────────────────────────────

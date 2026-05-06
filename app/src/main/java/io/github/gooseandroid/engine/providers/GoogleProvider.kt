@@ -4,6 +4,7 @@ import android.util.Log
 import io.github.gooseandroid.engine.ConversationMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.withContext
@@ -21,6 +22,12 @@ import java.util.concurrent.TimeUnit
 /**
  * Google Gemini provider implementation with full tool use (function calling) support.
  * Uses the Generative Language API.
+ *
+ * Conversation history format required by Google:
+ * ```
+ * [model] → parts: [{text: "..."}, {functionCall: {name: "...", args: {...}}}]
+ * [user]  → parts: [{functionResponse: {name: "...", response: {content: "..."}}}]
+ * ```
  *
  * Key differences from OpenAI/Anthropic:
  * - Tools are sent as `tools: [{ functionDeclarations: [...] }]`
@@ -46,6 +53,7 @@ class GoogleProvider(
     companion object {
         private const val TAG = "GoogleProvider"
         private const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+        private const val MAX_RETRIES = 3
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
     }
 
@@ -60,19 +68,37 @@ class GoogleProvider(
 
             Log.d(TAG, "Sending non-streaming request to $url")
 
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
+            var retryCount = 0
+            while (retryCount < MAX_RETRIES) {
+                val response = client.newCall(request).execute()
 
-            if (!response.isSuccessful) {
-                Log.e(TAG, "HTTP ${response.code}: $responseBody")
-                return@withContext LlmResponse(
-                    text = "",
-                    finishReason = "error",
-                    toolCalls = emptyList()
-                )
+                if (response.code == 429) {
+                    val retryAfter = response.header("Retry-After")?.toLongOrNull()
+                        ?: (2L * (retryCount + 1))
+                    Log.w(TAG, "Rate limited. Retrying in ${retryAfter}s (attempt ${retryCount + 1}/$MAX_RETRIES)")
+                    response.close()
+                    delay(retryAfter * 1000)
+                    retryCount++
+                    continue
+                }
+
+                val responseBody = response.body?.string() ?: ""
+
+                if (!response.isSuccessful) {
+                    Log.e(TAG, "HTTP ${response.code}: $responseBody")
+                    return@withContext LlmResponse(
+                        text = "",
+                        finishReason = "error",
+                        toolCalls = emptyList()
+                    )
+                }
+
+                return@withContext parseFullResponse(JSONObject(responseBody))
             }
 
-            parseFullResponse(JSONObject(responseBody))
+            // Exhausted retries
+            Log.e(TAG, "Exhausted $MAX_RETRIES retries due to rate limiting")
+            LlmResponse(text = "", finishReason = "error", toolCalls = emptyList())
         } catch (e: Exception) {
             Log.e(TAG, "Chat error: ${e.message}", e)
             LlmResponse(text = "", finishReason = "error")
@@ -90,7 +116,29 @@ class GoogleProvider(
 
             Log.d(TAG, "Sending streaming request to $url")
 
-            val response = client.newCall(request).execute()
+            var retryCount = 0
+            var response: okhttp3.Response? = null
+
+            while (retryCount < MAX_RETRIES) {
+                response = client.newCall(request).execute()
+
+                if (response.code == 429) {
+                    val retryAfter = response.header("Retry-After")?.toLongOrNull()
+                        ?: (2L * (retryCount + 1))
+                    Log.w(TAG, "Rate limited on stream. Retrying in ${retryAfter}s (attempt ${retryCount + 1}/$MAX_RETRIES)")
+                    response.close()
+                    delay(retryAfter * 1000)
+                    retryCount++
+                    continue
+                }
+                break
+            }
+
+            if (response == null) {
+                trySend(StreamEvent.Error("Failed to get response after $MAX_RETRIES retries"))
+                close()
+                return@callbackFlow
+            }
 
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string() ?: "Unknown error"
@@ -235,18 +283,12 @@ class GoogleProvider(
      * - After a tool call, the model's functionCall is echoed as a "model" message
      * - Tool results are sent as "user" messages with functionResponse parts
      * - Adjacent messages with the same role must be merged
+     *
+     * When an assistant message has [ConversationMessage.toolCalls], we reconstruct
+     * the functionCall parts from that data (preserving the original arguments).
      */
     private fun buildContentsArray(messages: List<ConversationMessage>): JSONArray {
         val contents = JSONArray()
-
-        // We need to handle the conversion carefully:
-        // - "user" → role: "user", text part
-        // - "assistant" → role: "model", text part (may also have functionCall parts)
-        // - "tool" → role: "user", functionResponse part
-        //
-        // Google requires that after a model message with functionCall,
-        // the next message is a user message with functionResponse.
-        // We also need to avoid consecutive same-role messages.
 
         var i = 0
         while (i < messages.size) {
@@ -277,26 +319,15 @@ class GoogleProvider(
                         parts.put(textPart)
                     }
 
-                    // Look ahead: if the next messages are "tool" results,
-                    // it means this assistant message had tool calls.
-                    // We need to reconstruct the functionCall parts for the model message
-                    // and then create a user message with functionResponse parts.
-                    val toolResults = mutableListOf<ConversationMessage>()
-                    var j = i + 1
-                    while (j < messages.size && messages[j].role == "tool") {
-                        toolResults.add(messages[j])
-                        j++
-                    }
-
-                    if (toolResults.isNotEmpty()) {
-                        // Add functionCall parts to the model message for each tool result
-                        for (toolResult in toolResults) {
+                    // If this assistant message has tool calls recorded, include them
+                    // as functionCall parts in the model message. This preserves the
+                    // original arguments so Google can match functionCall → functionResponse.
+                    if (msg.toolCalls != null && msg.toolCalls.isNotEmpty()) {
+                        for (tc in msg.toolCalls) {
                             val functionCallPart = JSONObject()
                             val functionCall = JSONObject()
-                            functionCall.put("name", toolResult.toolName ?: "unknown")
-                            // We don't have the original args, but Google needs the functionCall
-                            // to match the functionResponse. Use an empty args object.
-                            functionCall.put("args", JSONObject())
+                            functionCall.put("name", tc.name)
+                            functionCall.put("args", tc.input)
                             functionCallPart.put("functionCall", functionCall)
                             parts.put(functionCallPart)
                         }
@@ -310,46 +341,115 @@ class GoogleProvider(
                         contentObj.put("parts", parts)
                         contents.put(contentObj)
 
-                        // Now create the user message with functionResponse parts
-                        val userResponseObj = JSONObject()
-                        userResponseObj.put("role", "user")
-                        val responseParts = JSONArray()
+                        // Now look ahead for tool result messages and create the
+                        // user message with functionResponse parts
+                        val toolResults = mutableListOf<ConversationMessage>()
+                        var j = i + 1
+                        while (j < messages.size && messages[j].role == "tool") {
+                            toolResults.add(messages[j])
+                            j++
+                        }
 
-                        for (toolResult in toolResults) {
-                            val frPart = JSONObject()
-                            val functionResponse = JSONObject()
-                            functionResponse.put("name", toolResult.toolName ?: "unknown")
+                        if (toolResults.isNotEmpty()) {
+                            val userResponseObj = JSONObject()
+                            userResponseObj.put("role", "user")
+                            val responseParts = JSONArray()
 
-                            val responseContent = JSONObject()
-                            // Try to parse content as JSON, otherwise wrap as text
-                            try {
-                                val parsed = JSONObject(toolResult.content)
-                                responseContent.put("result", parsed)
-                            } catch (e: Exception) {
-                                val resultWrapper = JSONObject()
-                                resultWrapper.put("output", toolResult.content)
-                                responseContent.put("result", resultWrapper)
+                            for (toolResult in toolResults) {
+                                val frPart = JSONObject()
+                                val functionResponse = JSONObject()
+                                functionResponse.put("name", toolResult.toolName ?: "unknown")
+
+                                val responseContent = JSONObject()
+                                // Try to parse content as JSON, otherwise wrap as text
+                                try {
+                                    val parsed = JSONObject(toolResult.content)
+                                    responseContent.put("result", parsed)
+                                } catch (e: Exception) {
+                                    val resultWrapper = JSONObject()
+                                    resultWrapper.put("output", toolResult.content)
+                                    responseContent.put("result", resultWrapper)
+                                }
+                                functionResponse.put("response", responseContent)
+                                frPart.put("functionResponse", functionResponse)
+                                responseParts.put(frPart)
                             }
-                            functionResponse.put("response", responseContent)
-                            frPart.put("functionResponse", functionResponse)
-                            responseParts.put(frPart)
+
+                            userResponseObj.put("parts", responseParts)
+                            contents.put(userResponseObj)
+
+                            // Skip past the tool messages we already consumed
+                            i = j
+                        } else {
+                            i++
                         }
-
-                        userResponseObj.put("parts", responseParts)
-                        contents.put(userResponseObj)
-
-                        // Skip past the tool messages we already consumed
-                        i = j
                     } else {
-                        // No tool results follow — just a plain model message
-                        if (parts.length() == 0) {
-                            val textPart = JSONObject()
-                            textPart.put("text", " ")
-                            parts.put(textPart)
+                        // No tool calls — check if there are orphaned tool results following
+                        // (legacy path for messages without toolCalls field)
+                        val toolResults = mutableListOf<ConversationMessage>()
+                        var j = i + 1
+                        while (j < messages.size && messages[j].role == "tool") {
+                            toolResults.add(messages[j])
+                            j++
                         }
-                        contentObj.put("parts", parts)
-                        contents.put(contentObj)
-                        i++
+
+                        if (toolResults.isNotEmpty()) {
+                            // Reconstruct functionCall parts from tool result metadata
+                            for (toolResult in toolResults) {
+                                val functionCallPart = JSONObject()
+                                val functionCall = JSONObject()
+                                functionCall.put("name", toolResult.toolName ?: "unknown")
+                                functionCall.put("args", JSONObject())
+                                functionCallPart.put("functionCall", functionCall)
+                                parts.put(functionCallPart)
+                            }
+
+                            if (parts.length() == 0) {
+                                val textPart = JSONObject()
+                                textPart.put("text", " ")
+                                parts.put(textPart)
+                            }
+                            contentObj.put("parts", parts)
+                            contents.put(contentObj)
+
+                            // Create user message with functionResponse parts
+                            val userResponseObj = JSONObject()
+                            userResponseObj.put("role", "user")
+                            val responseParts = JSONArray()
+
+                            for (toolResult in toolResults) {
+                                val frPart = JSONObject()
+                                val functionResponse = JSONObject()
+                                functionResponse.put("name", toolResult.toolName ?: "unknown")
+
+                                val responseContent = JSONObject()
+                                try {
+                                    val parsed = JSONObject(toolResult.content)
+                                    responseContent.put("result", parsed)
+                                } catch (e: Exception) {
+                                    val resultWrapper = JSONObject()
+                                    resultWrapper.put("output", toolResult.content)
+                                    responseContent.put("result", resultWrapper)
+                                }
+                                functionResponse.put("response", responseContent)
+                                frPart.put("functionResponse", functionResponse)
+                                responseParts.put(frPart)
+                            }
+
+                            userResponseObj.put("parts", responseParts)
+                            contents.put(userResponseObj)
+                            i = j
+                        } else {
+                            // No tool results follow — just a plain model message
+                            if (parts.length() == 0) {
+                                val textPart = JSONObject()
+                                textPart.put("text", " ")
+                                parts.put(textPart)
+                            }
+                            contentObj.put("parts", parts)
+                            contents.put(contentObj)
+                            i++
+                        }
                     }
                 }
 

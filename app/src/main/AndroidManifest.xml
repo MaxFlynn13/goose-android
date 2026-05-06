@@ -7,8 +7,7 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Foreground service to keep goose alive -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- No foreground service needed — engine runs in-process -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Wake lock to prevent CPU sleep during long operations -->
@@ -61,14 +60,7 @@
             </intent-filter>
         </activity>
 
-        <service
-            android:name=".GooseService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="AI agent backend service - runs local inference server" />
-        </service>
+        <!-- Engine runs in-process via KotlinNativeEngine. No service needed. -->
 
         <service
             android:name=".GooseQuickSettingsTile"

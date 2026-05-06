@@ -24,7 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import io.github.gooseandroid.GoosePortHolder
+
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
 import kotlinx.coroutines.Dispatchers
@@ -83,21 +83,11 @@ fun DoctorScreen(onBack: () -> Unit) {
             }
             checks = checks.map { if (it.id == "goose_binary") binaryCheck else it }
 
-            // Goose Server — use GoosePortHolder.port
-            val serverCheck = withContext(Dispatchers.IO) {
-                val port = GoosePortHolder.port
-                if (port == 0) {
-                    DoctorCheck("goose_server", "Goose Server", CheckStatus.WARN, "Server port not assigned")
-                } else {
-                    try {
-                        val socket = Socket("127.0.0.1", port)
-                        socket.close()
-                        DoctorCheck("goose_server", "Goose Server", CheckStatus.PASS, "Server responding on port $port")
-                    } catch (e: Exception) {
-                        DoctorCheck("goose_server", "Goose Server", CheckStatus.FAIL, "Cannot connect to port $port: ${e.message}")
-                    }
-                }
-            }
+            // Goose Engine — Kotlin native engine (always available)
+            val serverCheck = DoctorCheck(
+                "goose_server", "Goose Engine", CheckStatus.PASS,
+                "Kotlin native engine active (no binary dependency)"
+            )
             checks = checks.map { if (it.id == "goose_server") serverCheck else it }
 
             // Internet Connection — try google.com, then cloudflare as fallback

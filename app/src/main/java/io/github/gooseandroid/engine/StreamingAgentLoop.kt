@@ -227,9 +227,15 @@ The working directory is the user's project workspace.
 
             // ── Record the assistant turn in messages ────────────────────
             // The assistant message includes both text content and tool call info
+            // so that providers can reconstruct the correct wire format
+            // (e.g., Anthropic needs tool_use blocks, OpenAI needs tool_calls array,
+            // Google needs functionCall parts).
             messages.add(ConversationMessage(
                 role = "assistant",
-                content = turnText.toString()
+                content = turnText.toString(),
+                toolCalls = turnToolCalls.map { tc ->
+                    ToolCallInfo(id = tc.id, name = tc.name, input = tc.input)
+                }
             ))
 
             // ── Execute tool calls ──────────────────────────────────────

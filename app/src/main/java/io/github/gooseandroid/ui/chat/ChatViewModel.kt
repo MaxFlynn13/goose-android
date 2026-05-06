@@ -555,7 +555,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 MessageRole.SYSTEM -> continue // should not reach here, but safety
             }
 
-            result.add(ConversationMessage(role = role, content = msg.content))
+            // For assistant messages with tool calls, include ToolCallInfo so
+            // providers can reconstruct the correct wire format (tool_use blocks,
+            // tool_calls array, functionCall parts).
+            val toolCallInfos = if (msg.role == MessageRole.ASSISTANT && msg.toolCalls.isNotEmpty()) {
+                msg.toolCalls.map { tc ->
+                    val inputJson = try {
+                        org.json.JSONObject(tc.input)
+                    } catch (e: Exception) {
+                        org.json.JSONObject()
+                    }
+                    ToolCallInfo(id = tc.id, name = tc.name, input = inputJson)
+                }
+            } else {
+                null
+            }
+
+            result.add(ConversationMessage(
+                role = role,
+                content = msg.content,
+                toolCalls = toolCallInfos
+            ))
 
             // If this assistant message had tool calls, include the tool results
             if (msg.role == MessageRole.ASSISTANT && msg.toolCalls.isNotEmpty()) {
