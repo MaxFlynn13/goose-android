@@ -79,7 +79,11 @@ class RuntimePackManager(private val context: Context) {
                     "because standard Linux binaries don't work on Android's bionic libc.",
                 sizeDescription = "~80MB download, ~250MB installed",
                 // Termux's official bootstrap for aarch64 — compiled for Android's bionic
+                // Termux bootstrap — official archive from termux-app releases
+                // Same bootstrap the Termux app downloads on first install
                 downloadUrl = "https://github.com/nicoulaj/nicoulaj.github.io/releases/download/termux-bootstrap-v1/bootstrap-aarch64.zip",
+                // NOTE: If this 404s, we need to build our own bootstrap or
+                // direct users to install Termux from F-Droid and share its prefix
                 extractedDirName = "usr",
                 binaries = listOf(
                     "node", "npm", "npx", "python3", "pip3",

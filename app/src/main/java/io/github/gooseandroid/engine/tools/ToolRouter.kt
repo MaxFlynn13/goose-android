@@ -28,6 +28,7 @@ class ToolRouter(
         register(FileWriteTool(workspaceDir))
         register(FileEditTool(workspaceDir))
         register(TreeTool(workspaceDir))
+        register(GitTool(workspaceDir).AsRegisteredTool())
 
         // App control tools (if context available)
         context?.let {
