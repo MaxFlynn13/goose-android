@@ -156,14 +156,14 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
                 "search_code" -> searchCode(input)
                 "get_pull_request" -> getPullRequest(input)
                 "list_commits" -> listCommits(input)
-                else -> ToolResult(isError = true, content = "Unknown tool: $name")
+                else -> ToolResult(isError = true, output = "Unknown tool: $name")
             }
         } catch (e: GitHubApiException) {
             ToolResult(isError = true, content = e.message ?: "GitHub API error")
         } catch (e: IOException) {
-            ToolResult(isError = true, content = "Network error: ${e.message}")
+            ToolResult(isError = true, output = "Network error: ${e.message}")
         } catch (e: Exception) {
-            ToolResult(isError = true, content = "Unexpected error: ${e.javaClass.simpleName} - ${e.message}")
+            ToolResult(isError = true, output = "Unexpected error: ${e.javaClass.simpleName} - ${e.message}")
         }
     }
 
@@ -265,7 +265,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
 
                 ToolResult(content = sb.toString().trimEnd())
             } else {
-                ToolResult(content = "Entry is of type '$type': ${json.optString("name", path)}")
+                ToolResult(output = "Entry is of type '$type': ${json.optString("name", path)}")
             }
         }
     }

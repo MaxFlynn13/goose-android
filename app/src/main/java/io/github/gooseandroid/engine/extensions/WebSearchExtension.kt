@@ -36,10 +36,10 @@ class WebSearchExtension(
                 "web_search" -> executeWebSearch(input)
                 "search_news" -> executeSearchNews(input)
                 "get_search_results" -> executeGetSearchResults(input)
-                else -> ToolResult.error("Unknown tool: $name")
+                else -> ToolResult(output = "Unknown tool: $name", isError = true)
             }
         } catch (e: Exception) {
-            ToolResult.error("Error executing $name: ${e.message ?: "Unknown error"}")
+            ToolResult(output = "Error executing $name: ${e.message ?: "Unknown error"}", isError = true)
         }
     }
 
@@ -128,11 +128,11 @@ class WebSearchExtension(
 
         val results = searchDuckDuckGo(query, maxResults)
         if (results.isEmpty()) {
-            return ToolResult.success("No results found for: $query")
+            return ToolResult(output = "No results found for: $query")
         }
 
         val formatted = formatResults(results, query)
-        return ToolResult.success(formatted)
+        return ToolResult(output = formatted)
     }
 
     private suspend fun executeSearchNews(input: JSONObject): ToolResult {
@@ -143,7 +143,7 @@ class WebSearchExtension(
         val newsQuery = "$query news recent"
         val results = searchDuckDuckGo(newsQuery, maxResults)
         if (results.isEmpty()) {
-            return ToolResult.success("No news results found for: $query")
+            return ToolResult(output = "No news results found for: $query")
         }
 
         val formatted = buildString {
@@ -160,7 +160,7 @@ class WebSearchExtension(
             appendLine("---")
             appendLine("_${results.size} news results found via DuckDuckGo_")
         }
-        return ToolResult.success(formatted)
+        return ToolResult(output = formatted)
     }
 
     private suspend fun executeGetSearchResults(input: JSONObject): ToolResult {
@@ -175,7 +175,7 @@ class WebSearchExtension(
         }
 
         if (results.isEmpty()) {
-            return ToolResult.success("No results found for: $query")
+            return ToolResult(output = "No results found for: $query")
         }
 
         val engineLabel = if (engine == "brave" && !braveApiKey.isNullOrBlank()) "Brave Search" else "DuckDuckGo"
@@ -197,7 +197,7 @@ class WebSearchExtension(
             appendLine("---")
             appendLine("_${results.size} results returned from $engineLabel_")
         }
-        return ToolResult.success(formatted)
+        return ToolResult(output = formatted)
     }
 
     // ─── Search Engines ──────────────────────────────────────────────────────────

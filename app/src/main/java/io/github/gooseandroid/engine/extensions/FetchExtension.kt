@@ -96,7 +96,7 @@ class FetchExtension : BuiltInExtension {
             "fetch_text" -> executeRequest(input, ResponseMode.TEXT)
             else -> ToolResult(
                 isError = true,
-                content = "Unknown tool: $name"
+                output = "Unknown tool: $name"
             )
         }
     }
@@ -107,7 +107,7 @@ class FetchExtension : BuiltInExtension {
 
     private fun executeRequest(input: JSONObject, mode: ResponseMode): ToolResult {
         val url = input.optString("url", "").ifEmpty {
-            return ToolResult(isError = true, content = "Missing required parameter: url")
+            return ToolResult(isError = true, output = "Missing required parameter: url")
         }
 
         val method = input.optString("method", "GET").uppercase()
@@ -157,7 +157,7 @@ class FetchExtension : BuiltInExtension {
                 }
                 else -> return ToolResult(
                     isError = true,
-                    content = "Unsupported HTTP method: $method"
+                    output = "Unsupported HTTP method: $method"
                 )
             }
 
@@ -176,7 +176,7 @@ class FetchExtension : BuiltInExtension {
                     response.close()
                     return ToolResult(
                         isError = true,
-                        content = "Too many redirects (exceeded $MAX_REDIRECTS)"
+                        output = "Too many redirects (exceeded $MAX_REDIRECTS)"
                     )
                 }
                 priorResponse = priorResponse.priorResponse
@@ -204,7 +204,7 @@ class FetchExtension : BuiltInExtension {
                     } catch (e: Exception) {
                         return ToolResult(
                             isError = true,
-                            content = "Failed to parse response as JSON: ${e.message}\n\nRaw response (first 1000 chars):\n${rawBody.take(1000)}"
+                            output = "Failed to parse response as JSON: ${e.message}\n\nRaw response (first 1000 chars):\n${rawBody.take(1000)}"
                         )
                     }
                 }
@@ -242,27 +242,27 @@ class FetchExtension : BuiltInExtension {
         } catch (e: SocketTimeoutException) {
             return ToolResult(
                 isError = true,
-                content = "Request timed out after 30 seconds: ${e.message}"
+                output = "Request timed out after 30 seconds: ${e.message}"
             )
         } catch (e: UnknownHostException) {
             return ToolResult(
                 isError = true,
-                content = "DNS resolution failed for URL '$url': ${e.message}"
+                output = "DNS resolution failed for URL '$url': ${e.message}"
             )
         } catch (e: SSLException) {
             return ToolResult(
                 isError = true,
-                content = "SSL/TLS error for URL '$url': ${e.message}"
+                output = "SSL/TLS error for URL '$url': ${e.message}"
             )
         } catch (e: IllegalArgumentException) {
             return ToolResult(
                 isError = true,
-                content = "Invalid URL '$url': ${e.message}"
+                output = "Invalid URL '$url': ${e.message}"
             )
         } catch (e: Exception) {
             return ToolResult(
                 isError = true,
-                content = "Request failed: ${e.javaClass.simpleName}: ${e.message}"
+                output = "Request failed: ${e.javaClass.simpleName}: ${e.message}"
             )
         }
     }
