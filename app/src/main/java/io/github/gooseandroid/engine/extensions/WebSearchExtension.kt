@@ -49,7 +49,7 @@ class WebSearchExtension(
         return JSONObject().apply {
             put("name", "web_search")
             put("description", "Search the web using DuckDuckGo. Returns a list of relevant results with titles, URLs, and snippets. No API key required.")
-            put("inputSchema", JSONObject().apply {
+            put("input_schema", JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
                     put("query", JSONObject().apply {
@@ -71,7 +71,7 @@ class WebSearchExtension(
         return JSONObject().apply {
             put("name", "search_news")
             put("description", "Search for recent news articles using DuckDuckGo. Returns news results with titles, URLs, snippets, and sources.")
-            put("inputSchema", JSONObject().apply {
+            put("input_schema", JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
                     put("query", JSONObject().apply {
@@ -93,7 +93,7 @@ class WebSearchExtension(
         return JSONObject().apply {
             put("name", "get_search_results")
             put("description", "Get detailed search results with full snippets and metadata. Supports DuckDuckGo (default) or Brave Search (if API key is configured).")
-            put("inputSchema", JSONObject().apply {
+            put("input_schema", JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
                     put("query", JSONObject().apply {

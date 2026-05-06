@@ -49,7 +49,7 @@ class FetchExtension : BuiltInExtension {
         return JSONObject().apply {
             put("name", name)
             put("description", description)
-            put("inputSchema", JSONObject().apply {
+            put("input_schema", JSONObject().apply {
                 put("type", "object")
                 put("required", JSONArray().put("url"))
                 put("properties", JSONObject().apply {

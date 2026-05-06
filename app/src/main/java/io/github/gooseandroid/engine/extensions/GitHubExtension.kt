@@ -729,7 +729,7 @@ class GitHubExtension(private val token: String) : BuiltInExtension {
         return JSONObject().apply {
             put("name", name)
             put("description", description)
-            put("inputSchema", JSONObject().apply {
+            put("input_schema", JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
                     properties.forEach { (key, value) -> put(key, value) }

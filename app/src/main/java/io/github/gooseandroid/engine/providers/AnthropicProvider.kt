@@ -401,17 +401,31 @@ class AnthropicProvider(
 
     private fun convertToolToAnthropicFormat(tool: JSONObject): JSONObject {
         val anthropicTool = JSONObject()
-        anthropicTool.put("name", tool.optString("name", ""))
-        anthropicTool.put("description", tool.optString("description", ""))
 
-        // Accept either "input_schema" or "parameters" as the schema key
-        val schema = tool.optJSONObject("input_schema")
-            ?: tool.optJSONObject("parameters")
-            ?: JSONObject().apply {
-                put("type", "object")
-                put("properties", JSONObject())
-            }
-        anthropicTool.put("input_schema", schema)
+        // Handle both OpenAI format (nested under "function") and flat format
+        val functionObj = tool.optJSONObject("function")
+        if (functionObj != null) {
+            // OpenAI format: { "type": "function", "function": { "name": ..., "parameters": ... } }
+            anthropicTool.put("name", functionObj.optString("name", ""))
+            anthropicTool.put("description", functionObj.optString("description", ""))
+            val schema = functionObj.optJSONObject("parameters")
+                ?: JSONObject().apply {
+                    put("type", "object")
+                    put("properties", JSONObject())
+                }
+            anthropicTool.put("input_schema", schema)
+        } else {
+            // Flat format: { "name": ..., "description": ..., "input_schema": ... }
+            anthropicTool.put("name", tool.optString("name", ""))
+            anthropicTool.put("description", tool.optString("description", ""))
+            val schema = tool.optJSONObject("input_schema")
+                ?: tool.optJSONObject("parameters")
+                ?: JSONObject().apply {
+                    put("type", "object")
+                    put("properties", JSONObject())
+                }
+            anthropicTool.put("input_schema", schema)
+        }
 
         return anthropicTool
     }

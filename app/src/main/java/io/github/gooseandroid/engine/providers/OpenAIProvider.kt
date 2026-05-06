@@ -310,6 +310,12 @@ class OpenAIProvider(
     }
 
     private fun convertToolToOpenAIFormat(tool: JSONObject): JSONObject {
+        // If already in OpenAI format, return as-is
+        if (tool.optString("type") == "function" && tool.has("function")) {
+            return tool
+        }
+
+        // Convert from flat/Anthropic format to OpenAI format
         val openaiTool = JSONObject()
         openaiTool.put("type", "function")
 
@@ -317,7 +323,6 @@ class OpenAIProvider(
         function.put("name", tool.optString("name", ""))
         function.put("description", tool.optString("description", ""))
 
-        // Accept either "parameters" or "input_schema" as the schema key
         val schema = tool.optJSONObject("parameters")
             ?: tool.optJSONObject("input_schema")
             ?: JSONObject().apply {
