@@ -321,6 +321,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             // Create assistant placeholder with empty content
             val assistantId = addAssistantPlaceholder()
+            currentAssistantId = assistantId
 
             // Build conversation history EXCLUDING system messages (they go via systemPrompt param)
             // and excluding the assistant placeholder we just added
@@ -362,38 +363,86 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
      * IMPORTANT: AgentEvent.Token contains the FULL accumulated text so far (not a delta).
      * We REPLACE the assistant message content with it — never append.
      */
+    // Tracks the current assistant message ID — changes when tools interrupt
+    private var currentAssistantId: String = ""
+    private var preToolContent: String = ""
+
     private fun handleAgentEvent(event: AgentEvent, assistantId: String) {
+        // Use tracked ID (may have changed due to tool calls creating new bubbles)
+        val activeId = currentAssistantId.ifBlank { assistantId }
+
         when (event) {
             is AgentEvent.Token -> {
                 // event.accumulated is the FULL text so far — replace, don't append
                 _streamingContent.value = event.accumulated
-                updateAssistantMessage(assistantId, event.accumulated)
+                updateAssistantMessage(activeId, event.accumulated)
             }
             is AgentEvent.Thinking -> {
                 _thinkingContent.value = event.text
             }
             is AgentEvent.ToolStart -> {
+                // CLOSE the current assistant bubble (finalize its content)
+                val currentContent = _streamingContent.value
+                if (currentContent.isNotBlank()) {
+                    updateAssistantMessage(activeId, currentContent, _thinkingContent.value)
+                }
+                _streamingContent.value = ""
+                _thinkingContent.value = ""
+
+                // Add tool call as a SEPARATE TOOL message in the list
                 addToolCall(event.id, event.name, event.input)
-                updateLastAssistantToolCalls()
+                val toolMsg = ChatMessage(
+                    id = "tool_${event.id}",
+                    role = MessageRole.TOOL,
+                    content = event.name,
+                    toolCalls = listOf(ToolCall(id = event.id, name = event.name, status = ToolCallStatus.RUNNING, input = event.input))
+                )
+                _messages.value = _messages.value + toolMsg
+
+                // Mark that we need a NEW bubble for post-tool content
+                currentAssistantId = "post_tool_${event.id}"
             }
             is AgentEvent.ToolEnd -> {
                 updateToolCall(event.id, event.output, event.isError)
-                updateLastAssistantToolCalls()
+                // Update the TOOL message with the result
+                val status = if (event.isError) ToolCallStatus.ERROR else ToolCallStatus.COMPLETE
+                _messages.value = _messages.value.map { msg ->
+                    if (msg.id == "tool_${event.id}") {
+                        msg.copy(toolCalls = msg.toolCalls.map { tc ->
+                            if (tc.id == event.id) tc.copy(status = status, output = event.output) else tc
+                        })
+                    } else msg
+                }
             }
             is AgentEvent.Complete -> {
-                // Finalize: use the Complete text if available, otherwise use what we accumulated
                 val finalContent = event.fullText.ifBlank { _streamingContent.value }
-                updateAssistantMessage(assistantId, finalContent, _thinkingContent.value)
-                // Clear streaming state — message is finalized
+                if (finalContent.isNotBlank()) {
+                    if (currentAssistantId.startsWith("post_tool_")) {
+                        // Post-tool response — create a NEW assistant bubble
+                        val newId = java.util.UUID.randomUUID().toString()
+                        val newMsg = ChatMessage(
+                            id = newId,
+                            role = MessageRole.ASSISTANT,
+                            content = finalContent,
+                            thinking = _thinkingContent.value
+                        )
+                        _messages.value = _messages.value + newMsg
+                    } else {
+                        // No tools were called — just finalize the original bubble
+                        updateAssistantMessage(activeId, finalContent, _thinkingContent.value)
+                    }
+                }
+                // Clear all streaming state
                 _streamingContent.value = ""
                 _thinkingContent.value = ""
                 _isGenerating.value = false
+                currentAssistantId = ""
             }
             is AgentEvent.Error -> {
-                // Show error as system message AND stop generating
                 _lastError.value = event.message
                 addSystemMessage(event.message)
                 _isGenerating.value = false
+                currentAssistantId = ""
             }
         }
     }

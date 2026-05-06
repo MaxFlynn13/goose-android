@@ -18,7 +18,7 @@ data class ChatMessage(
     val thinking: String = ""
 )
 
-enum class MessageRole { USER, ASSISTANT, SYSTEM }
+enum class MessageRole { USER, ASSISTANT, SYSTEM, TOOL }
 
 data class ToolCall(
     val id: String = "",

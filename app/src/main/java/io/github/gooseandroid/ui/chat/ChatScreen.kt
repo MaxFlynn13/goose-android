@@ -602,6 +602,12 @@ private fun MessageItem(
             )
             MessageRole.ASSISTANT -> AssistantBubble(message = message, onDelete = {})
             MessageRole.SYSTEM -> SystemBubble(message = message)
+            MessageRole.TOOL -> {
+                // Tool calls render as their own cards between message bubbles
+                for (tc in message.toolCalls) {
+                    ToolCallCard(toolCall = tc)
+                }
+            }
         }
         // Message timestamp
         Text(
