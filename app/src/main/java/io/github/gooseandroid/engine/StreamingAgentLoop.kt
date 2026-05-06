@@ -1,6 +1,7 @@
 package io.github.gooseandroid.engine
 
 import android.util.Log
+import io.github.gooseandroid.engine.extensions.BuiltInExtensionRegistry
 import io.github.gooseandroid.engine.mcp.McpExtensionManager
 import io.github.gooseandroid.engine.mcp.McpTool
 import io.github.gooseandroid.engine.providers.LlmProvider

@@ -5,6 +5,7 @@ import android.util.Log
 import io.github.gooseandroid.LocalModelManager
 import io.github.gooseandroid.data.SettingsKeys
 import io.github.gooseandroid.data.SettingsStore
+import io.github.gooseandroid.engine.extensions.BuiltInExtensionRegistry
 import io.github.gooseandroid.engine.mcp.McpExtensionManager
 import io.github.gooseandroid.engine.providers.LlmProvider
 import io.github.gooseandroid.engine.providers.ProviderFactory
