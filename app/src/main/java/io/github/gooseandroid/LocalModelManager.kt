@@ -27,7 +27,6 @@ class LocalModelManager(private val context: Context) {
         private const val MODELS_DIR = "models"
         private const val HF_BASE = "https://huggingface.co"
         // Kaggle base URL (used by Google AI Edge Gallery — no auth required)
-        private const val KAGGLE_BASE = "https://www.kaggle.com/api/v1/models"
 
         // Singleton download scope — survives screen navigation
         private val downloadScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -65,97 +64,73 @@ class LocalModelManager(private val context: Context) {
          * Quantization: int4 (4-bit) for optimal mobile performance
          */
         val MODEL_CATALOG = listOf(
-            // === Gemma 3 (Google) — Kaggle URLs (no auth required) ===
-            ModelInfo(
-                id = "gemma3-1b-it",
-                name = "Gemma 3 1B",
-                description = "Google's smallest Gemma 3. Ultra-fast, great for simple tasks.",
-                sizeBytes = 560_000_000L,
-                downloadUrl = "$KAGGLE_BASE/google/gemma-3/litert/gemma3-1b-it-int4/1/download",
-                filename = "gemma3-1b-it-int4.task",
-                format = ModelFormat.LITERT,
-                minRamMb = 2048,
-                recommended = true
-            ),
-            ModelInfo(
-                id = "gemma3-4b-it",
-                name = "Gemma 3 4B",
-                description = "Best balance of speed and intelligence. Recommended for most tasks.",
-                sizeBytes = 2_300_000_000L,
-                downloadUrl = "$KAGGLE_BASE/google/gemma-3/litert/gemma3-4b-it-int4/1/download",
-                filename = "gemma3-4b-it-int4.task",
-                format = ModelFormat.LITERT,
-                minRamMb = 4096,
-                recommended = true
-            ),
-
-            // === Gemma 4 (Google, newest) — Kaggle URLs ===
+            // === Gemma 4 (from Google AI Edge Gallery — litert-community, ungated) ===
             ModelInfo(
                 id = "gemma4-2b-it",
                 name = "Gemma 4 2B",
-                description = "Google's newest model. Improved reasoning and instruction following.",
-                sizeBytes = 1_400_000_000L,
-                downloadUrl = "$KAGGLE_BASE/google/gemma-4/litert/gemma4-2b-it-int4/1/download",
-                filename = "gemma4-2b-it-int4.task",
+                description = "Google's newest small model. Fast reasoning and instruction following.",
+                sizeBytes = 2_588_147_712L,
+                downloadUrl = "$HF_BASE/litert-community/gemma-4-E2B-it-litert-lm/resolve/6e5c4f1e395deb959c494953478fa5cec4b8008f/gemma-4-E2B-it.litertlm?download=true",
+                filename = "gemma-4-E2B-it.litertlm",
                 format = ModelFormat.LITERT,
-                minRamMb = 2048,
+                minRamMb = 4096,
                 recommended = true
             ),
             ModelInfo(
                 id = "gemma4-4b-it",
                 name = "Gemma 4 4B",
-                description = "Google's newest 4B model. Near-cloud quality for on-device inference.",
-                sizeBytes = 2_500_000_000L,
-                downloadUrl = "$KAGGLE_BASE/google/gemma-4/litert/gemma4-4b-it-int4/1/download",
-                filename = "gemma4-4b-it-int4.task",
-                format = ModelFormat.LITERT,
-                minRamMb = 4096,
-                recommended = true
-            ),
-            ModelInfo(
-                id = "gemma4-12b-it",
-                name = "Gemma 4 12B",
-                description = "Google's most capable on-device model. Excellent reasoning, needs 8GB+ RAM.",
-                sizeBytes = 6_500_000_000L,
-                downloadUrl = "$KAGGLE_BASE/google/gemma-4/litert/gemma4-12b-it-int4/1/download",
-                filename = "gemma4-12b-it-int4.task",
+                description = "Google's newest 4B model. Near-cloud quality on-device.",
+                sizeBytes = 3_659_530_240L,
+                downloadUrl = "$HF_BASE/litert-community/gemma-4-E4B-it-litert-lm/resolve/28299f30ee4d43294517a4ac93abd6163412f07f/gemma-4-E4B-it.litertlm?download=true",
+                filename = "gemma-4-E4B-it.litertlm",
                 format = ModelFormat.LITERT,
                 minRamMb = 8192,
-                recommended = false
+                recommended = true
             ),
-
-            // === Llama 3.2 (Meta via Google) — Kaggle URLs ===
+            // === Gemma 3 (stable, litert-community) ===
             ModelInfo(
-                id = "llama-3.2-1b-it",
-                name = "Llama 3.2 1B",
-                description = "Meta's smallest Llama optimized for mobile. Ultra-fast responses.",
-                sizeBytes = 750_000_000L,
-                downloadUrl = "$KAGGLE_BASE/google/llama-3.2/litert/llama-3.2-1b-it-int4/1/download",
-                filename = "llama-3.2-1b-it-int4.task",
+                id = "gemma3-1b-it",
+                name = "Gemma 3 1B",
+                description = "Ultra-fast, great for simple tasks and quick responses.",
+                sizeBytes = 1_073_741_824L,
+                downloadUrl = "$HF_BASE/litert-community/Gemma3-1B-IT/resolve/42d538a932e8d5b12e6b3b455f5572560bd60b2c/gemma3-1b-it-int4.litertlm?download=true",
+                filename = "gemma3-1b-it-int4.litertlm",
                 format = ModelFormat.LITERT,
                 minRamMb = 2048,
                 recommended = true
             ),
+            // === Qwen 2.5 (Alibaba, ungated) ===
             ModelInfo(
-                id = "llama-3.2-3b-it",
-                name = "Llama 3.2 3B",
-                description = "Meta's 3B Llama. Good balance of speed and capability on mobile.",
+                id = "qwen2.5-1.5b",
+                name = "Qwen 2.5 1.5B",
+                description = "Strong multilingual and coding capabilities.",
                 sizeBytes = 1_800_000_000L,
-                downloadUrl = "$KAGGLE_BASE/google/llama-3.2/litert/llama-3.2-3b-it-int4/1/download",
-                filename = "llama-3.2-3b-it-int4.task",
+                downloadUrl = "$HF_BASE/litert-community/Qwen2.5-1.5B-Instruct/resolve/19edb84c69a0212f29a6ef17ba0d6f278b6a1614/Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm?download=true",
+                filename = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm",
                 format = ModelFormat.LITERT,
-                minRamMb = 4096,
+                minRamMb = 2048,
                 recommended = true
             ),
-
-            // === Phi 3.5 Mini (Microsoft via Google) — Kaggle URL ===
+            // === DeepSeek R1 (reasoning model, ungated) ===
             ModelInfo(
-                id = "phi-3.5-mini",
-                name = "Phi 3.5 Mini",
-                description = "Microsoft's compact model. Strong reasoning for its size.",
-                sizeBytes = 2_200_000_000L,
-                downloadUrl = "$KAGGLE_BASE/google/phi-3.5/litert/phi-3.5-mini-it-int4/1/download",
-                filename = "phi-3.5-mini-it-int4.task",
+                id = "deepseek-r1-1.5b",
+                name = "DeepSeek R1 1.5B",
+                description = "Chain-of-thought reasoning model distilled to 1.5B parameters.",
+                sizeBytes = 1_800_000_000L,
+                downloadUrl = "$HF_BASE/litert-community/DeepSeek-R1-Distill-Qwen-1.5B/resolve/e34bb88632342d1f9640bad579a45134eb1cf988/DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.litertlm?download=true",
+                filename = "DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.litertlm",
+                format = ModelFormat.LITERT,
+                minRamMb = 2048,
+                recommended = false
+            ),
+            // === Gemma 3n (newest nano, multimodal) ===
+            ModelInfo(
+                id = "gemma3n-2b-it",
+                name = "Gemma 3n 2B",
+                description = "Google's newest nano model. Vision + audio + text.",
+                sizeBytes = 3_655_827_456L,
+                downloadUrl = "$HF_BASE/google/gemma-3n-E2B-it-litert-lm/resolve/ba9ca88da013b537b6ed38108be609b8db1c3a16/gemma-3n-E2B-it-int4.litertlm?download=true",
+                filename = "gemma-3n-E2B-it-int4.litertlm",
                 format = ModelFormat.LITERT,
                 minRamMb = 4096,
                 recommended = false
