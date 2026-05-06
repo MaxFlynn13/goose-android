@@ -39,6 +39,8 @@ class AnthropicProvider(
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .connectionPool(okhttp3.ConnectionPool(5, 30, TimeUnit.SECONDS))
         .build()
 
     companion object {

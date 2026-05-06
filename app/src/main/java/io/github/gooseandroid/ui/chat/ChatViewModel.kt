@@ -440,17 +440,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             is AgentEvent.Token -> {
                 // event.accumulated is the FULL text so far — replace, don't append
                 _streamingContent.value = event.accumulated
-                updateAssistantMessage(activeId, event.accumulated)
+
+                // If this is a post-tool bubble that doesn't exist yet, create it first
+                if (activeId.startsWith("post_tool_") &&
+                    _messages.value.none { it.id == activeId }) {
+                    val newMsg = ChatMessage(
+                        id = activeId,
+                        role = MessageRole.ASSISTANT,
+                        content = event.accumulated
+                    )
+                    _messages.value = _messages.value + newMsg
+                } else {
+                    updateAssistantMessage(activeId, event.accumulated)
+                }
             }
             is AgentEvent.Thinking -> {
                 _thinkingContent.value = event.text
             }
             is AgentEvent.ToolStart -> {
-                // CLOSE the current assistant bubble (finalize its content)
+                // FREEZE the current assistant bubble — stop streaming into it
                 val currentContent = _streamingContent.value
                 if (currentContent.isNotBlank()) {
                     updateAssistantMessage(activeId, currentContent, _thinkingContent.value)
+                } else if (_messages.value.any { it.id == activeId && it.content.isBlank() }) {
+                    // Remove empty placeholder bubble (prevents flickering)
+                    _messages.value = _messages.value.filter { it.id != activeId }
                 }
+                // Clear streaming state completely
                 _streamingContent.value = ""
                 _thinkingContent.value = ""
 
@@ -464,7 +480,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 _messages.value = _messages.value + toolMsg
 
-                // Mark that we need a NEW bubble for post-tool content
+                // Set new ID for post-tool content — bubble will be created on first Token
                 currentAssistantId = "post_tool_${event.id}"
             }
             is AgentEvent.ToolEnd -> {

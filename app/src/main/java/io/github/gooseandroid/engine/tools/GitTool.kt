@@ -106,11 +106,16 @@ class GitTool(private val workingDir: File) {
         if (branch.isNotBlank()) cloneCommand.setBranch(branch)
         if (depth > 0) cloneCommand.setDepth(depth)
 
-        // Add credentials if provided
+        // Add credentials — JGit requires a CredentialsProvider even for public repos
         val token = args.optString("token", "")
         if (token.isNotBlank()) {
             cloneCommand.setCredentialsProvider(
                 UsernamePasswordCredentialsProvider(token, "")
+            )
+        } else {
+            // Anonymous access: provide empty credentials for public repos
+            cloneCommand.setCredentialsProvider(
+                UsernamePasswordCredentialsProvider("", "")
             )
         }
 
@@ -226,6 +231,8 @@ class GitTool(private val workingDir: File) {
         val pullCommand = git.pull().setRemote(remote)
         if (token.isNotBlank()) {
             pullCommand.setCredentialsProvider(UsernamePasswordCredentialsProvider(token, ""))
+        } else {
+            pullCommand.setCredentialsProvider(UsernamePasswordCredentialsProvider("", ""))
         }
 
         val result = pullCommand.call()

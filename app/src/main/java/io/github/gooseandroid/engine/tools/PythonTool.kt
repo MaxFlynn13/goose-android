@@ -126,8 +126,18 @@ class PythonTool(
             sys.put("stderr", stderr)
 
             try {
-                // Execute the code
-                py.getModule("builtins").callAttr("exec", code)
+                // Execute code via a helper module to avoid "frame does not exist" errors.
+                // Chaquopy's exec() needs a proper module context with __builtins__.
+                // We use runpy-style execution through a temp file approach.
+                val tempScript = File(workingDir, ".goose_exec_temp.py")
+                try {
+                    tempScript.writeText(code)
+                    // Use runpy.run_path which creates a proper execution frame
+                    val runpy = py.getModule("runpy")
+                    runpy.callAttr("run_path", tempScript.absolutePath)
+                } finally {
+                    tempScript.delete()
+                }
 
                 // Get output
                 val output = stdout.callAttr("getvalue").toString()
