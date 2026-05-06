@@ -64,7 +64,14 @@ class LocalModelProvider(
 
             isLoading = true
             try {
-                Log.i(TAG, "Loading model: $modelFilePath")
+                val modelFile = File(modelFilePath)
+                Log.i(TAG, "Loading model: $modelFilePath (exists=${modelFile.exists()}, size=${modelFile.length()})")
+
+                if (!modelFile.exists()) {
+                    loadError = "Model file does not exist: $modelFilePath"
+                    return@withContext null
+                }
+
                 val startTime = System.currentTimeMillis()
 
                 val options = com.google.mediapipe.tasks.genai.llminference.LlmInference
@@ -79,11 +86,16 @@ class LocalModelProvider(
                     .createFromOptions(context, options)
 
                 val elapsed = System.currentTimeMillis() - startTime
-                Log.i(TAG, "Model loaded in ${elapsed}ms")
+                Log.i(TAG, "Model loaded successfully in ${elapsed}ms")
                 inference
             } catch (e: Exception) {
-                loadError = e.message ?: "Unknown error loading model"
-                Log.e(TAG, "Failed to load model: ${e.message}", e)
+                val detailedError = "${e.javaClass.simpleName}: ${e.message}" +
+                    if (modelFilePath.endsWith(".gguf")) {
+                        "\n\nNote: MediaPipe may not support GGUF format in this version. " +
+                        "The model file format may need to be .tflite or .task for on-device inference."
+                    } else ""
+                loadError = detailedError
+                Log.e(TAG, "Failed to load model: $detailedError", e)
                 null
             } finally {
                 isLoading = false

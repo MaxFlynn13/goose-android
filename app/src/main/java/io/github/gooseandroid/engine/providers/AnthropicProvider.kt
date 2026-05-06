@@ -287,12 +287,24 @@ class AnthropicProvider(
         if (tools.isNotEmpty()) {
             val toolsArray = JSONArray()
             for (tool in tools) {
-                toolsArray.put(convertToolToAnthropicFormat(tool))
+                val converted = convertToolToAnthropicFormat(tool)
+                val name = converted.optString("name", "")
+                // Skip tools with empty names (invalid)
+                if (name.isBlank()) {
+                    Log.w(TAG, "Skipping tool with empty name: $tool")
+                    continue
+                }
+                toolsArray.put(converted)
             }
-            body.put("tools", toolsArray)
+            if (toolsArray.length() > 0) {
+                body.put("tools", toolsArray)
+            }
         }
 
-        return body.toString()
+        val bodyStr = body.toString()
+        // Log first 500 chars of request for debugging 400 errors
+        Log.d(TAG, "Request body (first 500): ${bodyStr.take(500)}")
+        return bodyStr
     }
 
     /**
