@@ -45,6 +45,7 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
     private val shellEnv = buildShellEnvironment()
     private val toolRouter = ToolRouter(workspaceDir, shellEnv, context)
     private val mcpManager = McpExtensionManager()
+    private val extensionRegistry = io.github.gooseandroid.engine.extensions.BuiltInExtensionRegistry(context)
     val permissionManager = PermissionManager()
     private val contextTracker = ContextTracker()
 
@@ -67,11 +68,20 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             // Still mark as connected — the user can configure a provider later
         }
 
-        // Load configured MCP extensions
+        // Load configured MCP extensions (stdio/HTTP)
         loadExtensions()
 
+        // Load built-in Kotlin extensions (GitHub, Web Search, Fetch)
+        try {
+            extensionRegistry.loadExtensions()
+            Log.i(TAG, "Built-in extensions: ${extensionRegistry.getLoadedExtensions().joinToString()}")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load built-in extensions: ${e.message}")
+        }
+
         _status.value = EngineStatus.CONNECTED
-        Log.i(TAG, "Kotlin native engine ready. Tools: ${toolRouter.getToolNames().joinToString()}")
+        val allTools = toolRouter.getToolNames() + extensionRegistry.getAllToolDefinitions().map { it.optString("name") }
+        Log.i(TAG, "Kotlin native engine ready. Tools: ${allTools.joinToString()}")
 
         // Update log viewer status
         try {
@@ -108,7 +118,8 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             mcpManager = mcpManager,
             permissionManager = permissionManager,
             contextTracker = contextTracker,
-            modelId = provider.modelId
+            modelId = provider.modelId,
+            extensionRegistry = extensionRegistry
         )
 
         // Run the agent loop and emit all events

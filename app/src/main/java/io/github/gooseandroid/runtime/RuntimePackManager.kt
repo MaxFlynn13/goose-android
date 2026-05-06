@@ -70,30 +70,17 @@ class RuntimePackManager(private val context: Context) {
          * Standalone Node/Python downloads are disabled because they will download
          * but fail to execute on Android's bionic libc.
          */
-        val PACKS = listOf(
-            RuntimePack(
-                id = "termux",
-                name = "Developer Environment (Termux)",
-                description = "Full development tools compiled for Android: Node.js, Python, Git, SSH, " +
-                    "curl, and 1000+ packages. This is the ONLY way to get full dev tools on Android " +
-                    "because standard Linux binaries don't work on Android's bionic libc.",
-                sizeDescription = "~80MB download, ~250MB installed",
-                // Termux's official bootstrap for aarch64 — compiled for Android's bionic
-                // Termux bootstrap — official archive from termux-app releases
-                // Same bootstrap the Termux app downloads on first install
-                downloadUrl = "https://github.com/nicoulaj/nicoulaj.github.io/releases/download/termux-bootstrap-v1/bootstrap-aarch64.zip",
-                // NOTE: If this 404s, we need to build our own bootstrap or
-                // direct users to install Termux from F-Droid and share its prefix
-                extractedDirName = "usr",
-                binaries = listOf(
-                    "node", "npm", "npx", "python3", "pip3",
-                    "git", "ssh", "scp", "curl", "wget",
-                    "bash", "zsh", "tar", "gzip", "find",
-                    "grep", "awk", "sed", "jq"
-                ),
-                version = "2024.1"
-            )
-        )
+        // Runtime packs are no longer needed because:
+        // - Git: JGit (pure Kotlin, built-in)
+        // - GitHub: Built-in Kotlin extension
+        // - Web Search: Built-in Kotlin extension
+        // - HTTP Fetch: Built-in Kotlin extension
+        // - Python: Chaquopy (planned, in-process CPython)
+        // - Node.js: Not needed — MCP extensions reimplemented in Kotlin
+        //
+        // The Termux bootstrap URL was returning 404 and standard Linux
+        // binaries don't work on Android's bionic libc anyway.
+        val PACKS = emptyList<RuntimePack>()
     }
 
     private val workspaceDir: File

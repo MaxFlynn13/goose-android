@@ -43,7 +43,8 @@ class StreamingAgentLoop(
     private val contextTracker: ContextTracker? = null,
     private val tokenCounter: TokenCounter = TokenCounter(),
     private val modelId: String = "",
-    private val maxIterations: Int = 25
+    private val maxIterations: Int = 25,
+    private val extensionRegistry: io.github.gooseandroid.engine.extensions.BuiltInExtensionRegistry? = null
 ) {
     companion object {
         private const val TAG = "StreamingAgentLoop"
@@ -358,9 +359,15 @@ The working directory is the user's project workspace.
     private fun buildToolDefinitions(): List<JSONObject> {
         val defs = toolRouter.getToolDefinitions().toMutableList()
 
+        // Add MCP extension tools
         val mcpTools: List<McpTool> = mcpManager.getAllTools()
         for (tool in mcpTools) {
             defs.add(mcpToolToJson(tool))
+        }
+
+        // Add built-in Kotlin extension tools (GitHub, Web Search, Fetch)
+        extensionRegistry?.getAllToolDefinitions()?.let { extTools ->
+            defs.addAll(extTools)
         }
 
         return defs
@@ -371,12 +378,20 @@ The working directory is the user's project workspace.
      * or to [McpExtensionManager] for MCP extension tools.
      */
     private suspend fun executeTool(toolCall: LlmToolCall): ToolCallResult {
+        // 1. Check built-in developer tools (shell, edit, write, tree, git)
         val builtinNames = toolRouter.getToolNames()
         if (toolCall.name in builtinNames) {
             val result = toolRouter.executeTool(toolCall.name, toolCall.input)
             return ToolCallResult(result.output, result.isError)
         }
 
+        // 2. Check built-in Kotlin extensions (GitHub, Web Search, Fetch)
+        if (extensionRegistry?.hasExtensionTool(toolCall.name) == true) {
+            val result = extensionRegistry.executeTool(toolCall.name, toolCall.input)
+            return ToolCallResult(result.output, result.isError)
+        }
+
+        // 3. Check MCP extensions (stdio/HTTP)
         return try {
             val mcpResult = mcpManager.callTool(toolCall.name, toolCall.input)
             ToolCallResult(mcpResult.content, mcpResult.isError)
@@ -384,11 +399,12 @@ The working directory is the user's project workspace.
             ToolCallResult(
                 "Error: Unknown tool '${toolCall.name}'. " +
                 "Available: ${builtinNames.joinToString()}, " +
+                "${extensionRegistry?.getLoadedExtensions()?.joinToString() ?: ""}, " +
                 "${mcpManager.getAllTools().joinToString { it.name }}",
                 isError = true
             )
         } catch (e: Exception) {
-            ToolCallResult("MCP tool error: ${e.message}", isError = true)
+            ToolCallResult("Tool error: ${e.message}", isError = true)
         }
     }
 
