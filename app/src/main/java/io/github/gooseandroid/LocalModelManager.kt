@@ -51,137 +51,106 @@ class LocalModelManager(private val context: Context) {
          * Once Google AI Edge Gallery publishes ungated .task files,
          * we'll add those as preferred options.
          */
+        /**
+         * Model catalog using MediaPipe/LiteRT-compatible formats.
+         *
+         * MediaPipe LlmInference supports:
+         * - .bin files (MediaPipe GPU format, from AI Edge Model Garden)
+         * - .tflite files (TensorFlow Lite format)
+         *
+         * These are sourced from Google's official AI Edge repositories.
+         * Note: Some models require HuggingFace authentication.
+         * We use publicly available models where possible.
+         */
         val MODEL_CATALOG = listOf(
-            // === Gemma 3 (Google, latest generation) ===
+            // === Gemma 2 2B (Google, MediaPipe-optimized) ===
             ModelInfo(
-                id = "gemma3-1b-it-q4",
-                name = "Gemma 3 1B Instruct",
-                description = "Google's latest small model. Fast, efficient, great for quick tasks.",
+                id = "gemma2-2b-it-gpu",
+                name = "Gemma 2 2B (GPU)",
+                description = "Google's Gemma 2 optimized for MediaPipe GPU inference. Fast and efficient.",
+                sizeBytes = 1_300_000_000L,
+                downloadUrl = "$HF_BASE/litert-community/Gemma2-2B-IT/resolve/main/gemma2-2b-it-gpu-int4.bin",
+                filename = "gemma2-2b-it-gpu-int4.bin",
+                format = ModelFormat.LITERT,
+                minRamMb = 2048,
+                recommended = true
+            ),
+
+            // === Gemma 3 1B (Google, smallest, fastest) ===
+            ModelInfo(
+                id = "gemma3-1b-it-gpu",
+                name = "Gemma 3 1B (GPU)",
+                description = "Google's smallest Gemma 3. Ultra-fast inference on mobile GPU.",
                 sizeBytes = 900_000_000L,
-                downloadUrl = "$HF_BASE/unsloth/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf",
-                filename = "gemma-3-1b-it-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
+                downloadUrl = "$HF_BASE/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task",
+                filename = "gemma3-1b-it-int4.task",
+                format = ModelFormat.LITERT,
                 minRamMb = 2048,
                 recommended = true
             ),
-            ModelInfo(
-                id = "gemma3-4b-it-q4",
-                name = "Gemma 3 4B Instruct",
-                description = "Excellent balance of speed and intelligence. Best pick for most tasks.",
-                sizeBytes = 2_700_000_000L,
-                downloadUrl = "$HF_BASE/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
-                filename = "gemma-3-4b-it-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
-                minRamMb = 4096,
-                recommended = true
-            ),
-            ModelInfo(
-                id = "gemma3-12b-it-q4",
-                name = "Gemma 3 12B Instruct",
-                description = "High-quality reasoning. Needs more RAM but significantly smarter.",
-                sizeBytes = 7_300_000_000L,
-                downloadUrl = "$HF_BASE/unsloth/gemma-3-12b-it-GGUF/resolve/main/gemma-3-12b-it-Q4_K_M.gguf",
-                filename = "gemma-3-12b-it-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
-                minRamMb = 8192,
-                recommended = true
-            ),
 
-            // === Gemma 4 (Google, newest generation, multimodal) ===
+            // === Gemma 3 4B (Google, recommended) ===
             ModelInfo(
-                id = "gemma4-2b-it-q4",
-                name = "Gemma 4 2B Instruct",
-                description = "Google's newest model. Improved reasoning over Gemma 3, fast on mobile.",
-                sizeBytes = 1_500_000_000L,
-                downloadUrl = "$HF_BASE/bartowski/gemma-4-2b-it-GGUF/resolve/main/gemma-4-2b-it-Q4_K_M.gguf",
-                filename = "gemma-4-2b-it-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
-                minRamMb = 3072,
-                recommended = true
-            ),
-            ModelInfo(
-                id = "gemma4-4b-it-q4",
-                name = "Gemma 4 4B Instruct",
+                id = "gemma3-4b-it-gpu",
+                name = "Gemma 3 4B (GPU)",
                 description = "Best balance of speed and intelligence. Recommended for most tasks.",
-                sizeBytes = 2_800_000_000L,
-                downloadUrl = "$HF_BASE/bartowski/gemma-4-4b-it-GGUF/resolve/main/gemma-4-4b-it-Q4_K_M.gguf",
-                filename = "gemma-4-4b-it-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
+                sizeBytes = 2_500_000_000L,
+                downloadUrl = "$HF_BASE/litert-community/Gemma3-4B-IT/resolve/main/gemma3-4b-it-int4.task",
+                filename = "gemma3-4b-it-int4.task",
+                format = ModelFormat.LITERT,
                 minRamMb = 4096,
                 recommended = true
             ),
+
+            // === Gemma 3 12B (Google, high quality) ===
             ModelInfo(
-                id = "gemma4-12b-it-q4",
-                name = "Gemma 4 12B Instruct",
-                description = "Google's most capable mobile model. Near-cloud quality reasoning.",
-                sizeBytes = 7_500_000_000L,
-                downloadUrl = "$HF_BASE/bartowski/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
-                filename = "gemma-4-12b-it-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
+                id = "gemma3-12b-it-gpu",
+                name = "Gemma 3 12B (GPU)",
+                description = "High-quality reasoning. Needs 8GB+ RAM but significantly smarter.",
+                sizeBytes = 6_800_000_000L,
+                downloadUrl = "$HF_BASE/litert-community/Gemma3-12B-IT/resolve/main/gemma3-12b-it-int4.task",
+                filename = "gemma3-12b-it-int4.task",
+                format = ModelFormat.LITERT,
                 minRamMb = 8192,
-                recommended = true
+                recommended = false
             ),
 
-            // === Llama 3.2 (Meta, ungated) ===
+            // === Llama 3.2 1B (Meta, via LiteRT community) ===
             ModelInfo(
-                id = "llama-3.2-1b-q4",
-                name = "Llama 3.2 1B Instruct",
-                description = "Meta's smallest Llama. Ultra-fast, good for simple tasks.",
-                sizeBytes = 750_000_000L,
-                downloadUrl = "$HF_BASE/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-                filename = "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
+                id = "llama-3.2-1b-gpu",
+                name = "Llama 3.2 1B (GPU)",
+                description = "Meta's smallest Llama, optimized for MediaPipe. Ultra-fast.",
+                sizeBytes = 800_000_000L,
+                downloadUrl = "$HF_BASE/litert-community/Llama-3.2-1B-Instruct/resolve/main/llama-3.2-1b-instruct-int4.task",
+                filename = "llama-3.2-1b-instruct-int4.task",
+                format = ModelFormat.LITERT,
                 minRamMb = 2048,
                 recommended = true
             ),
+
+            // === Llama 3.2 3B (Meta, via LiteRT community) ===
             ModelInfo(
-                id = "llama-3.2-3b-q4",
-                name = "Llama 3.2 3B Instruct",
-                description = "Meta's 3B Llama. Good balance of speed and capability.",
+                id = "llama-3.2-3b-gpu",
+                name = "Llama 3.2 3B (GPU)",
+                description = "Meta's 3B Llama for MediaPipe. Good balance of speed and capability.",
                 sizeBytes = 2_000_000_000L,
-                downloadUrl = "$HF_BASE/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                filename = "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
+                downloadUrl = "$HF_BASE/litert-community/Llama-3.2-3B-Instruct/resolve/main/llama-3.2-3b-instruct-int4.task",
+                filename = "llama-3.2-3b-instruct-int4.task",
+                format = ModelFormat.LITERT,
                 minRamMb = 4096,
                 recommended = true
             ),
 
-            // === Phi 4 Mini (Microsoft, latest) ===
+            // === Phi 3.5 Mini (Microsoft, via LiteRT community) ===
             ModelInfo(
-                id = "phi-4-mini-q4",
-                name = "Phi 4 Mini (3.8B)",
-                description = "Microsoft's latest compact model. Excellent reasoning.",
-                sizeBytes = 2_400_000_000L,
-                downloadUrl = "$HF_BASE/bartowski/phi-4-mini-instruct-GGUF/resolve/main/phi-4-mini-instruct-Q4_K_M.gguf",
-                filename = "phi-4-mini-instruct-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
+                id = "phi-3.5-mini-gpu",
+                name = "Phi 3.5 Mini (GPU)",
+                description = "Microsoft's compact model. Strong reasoning for its size.",
+                sizeBytes = 2_200_000_000L,
+                downloadUrl = "$HF_BASE/litert-community/Phi-3.5-mini/resolve/main/phi-3.5-mini-int4.task",
+                filename = "phi-3.5-mini-int4.task",
+                format = ModelFormat.LITERT,
                 minRamMb = 4096,
-                recommended = false
-            ),
-
-            // === Qwen 2.5 (Alibaba, strong multilingual) ===
-            ModelInfo(
-                id = "qwen2.5-3b-q4",
-                name = "Qwen 2.5 3B Instruct",
-                description = "Strong multilingual model. Great for code and reasoning.",
-                sizeBytes = 2_100_000_000L,
-                downloadUrl = "$HF_BASE/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-                filename = "qwen2.5-3b-instruct-q4_k_m.gguf",
-                format = ModelFormat.GGUF,
-                minRamMb = 4096,
-                recommended = false
-            ),
-
-            // === SmolLM2 (HuggingFace, tiny but capable) ===
-            ModelInfo(
-                id = "smollm2-1.7b-q4",
-                name = "SmolLM2 1.7B Instruct",
-                description = "HuggingFace's tiny model. Extremely fast, surprisingly capable.",
-                sizeBytes = 1_100_000_000L,
-                downloadUrl = "$HF_BASE/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
-                filename = "SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
-                format = ModelFormat.GGUF,
-                minRamMb = 2048,
                 recommended = false
             )
         )

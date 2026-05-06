@@ -262,8 +262,15 @@ class GoogleProvider(
             val toolDeclarations = JSONObject()
             val functionDeclarations = JSONArray()
 
-            for (tool in tools) {
-                functionDeclarations.put(convertToolToGoogleFormat(tool))
+            for ((index, tool) in tools.withIndex()) {
+                val converted = convertToolToGoogleFormat(tool)
+                val name = converted.optString("name", "")
+                // Validate: Google requires names to be alphanumeric + underscore/dot/colon/dash
+                if (name.isBlank() || !name.matches(Regex("^[a-zA-Z_][a-zA-Z0-9_.:-]*$"))) {
+                    Log.w(TAG, "Skipping tool[$index] with invalid name: '$name'")
+                    continue
+                }
+                functionDeclarations.put(converted)
             }
             toolDeclarations.put("functionDeclarations", functionDeclarations)
             toolsArray.put(toolDeclarations)

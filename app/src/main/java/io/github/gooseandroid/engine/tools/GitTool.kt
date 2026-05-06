@@ -401,7 +401,14 @@ class GitTool(private val workingDir: File) {
     inner class AsRegisteredTool : Tool {
         override val name = "git"
         override val description = "Execute git operations (clone, init, status, add, commit, push, pull, log, diff, branch, checkout, merge, remote)"
-        override fun getSchema(): JSONObject = DEFINITION.getJSONObject("input_schema")
+        override fun getSchema(): JSONObject = JSONObject().apply {
+            put("type", "function")
+            put("function", JSONObject().apply {
+                put("name", "git")
+                put("description", description)
+                put("parameters", DEFINITION.getJSONObject("input_schema"))
+            })
+        }
         override suspend fun execute(input: JSONObject): ToolResult = this@GitTool.execute(input)
     }
 
