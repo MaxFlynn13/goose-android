@@ -58,7 +58,7 @@ class GitTool(private val workingDir: File) {
         }
     }
 
-    fun execute(input: JSONObject): ToolCallResult {
+    fun execute(input: JSONObject): ToolResult {
         val command = input.optString("command", "")
         val args = input.optJSONObject("args") ?: JSONObject()
         val path = input.optString("path", "")
@@ -79,22 +79,22 @@ class GitTool(private val workingDir: File) {
                 "checkout" -> checkout(args, repoDir)
                 "merge" -> merge(args, repoDir)
                 "remote" -> remote(args, repoDir)
-                else -> ToolCallResult("Unknown git command: $command. " +
+                else -> ToolResult("Unknown git command: $command. " +
                     "Supported: clone, init, status, add, commit, push, pull, log, diff, branch, checkout, merge, remote",
                     isError = true)
             }
         } catch (e: GitAPIException) {
             Log.e(TAG, "Git error: ${e.message}", e)
-            ToolCallResult("Git error: ${e.message}", isError = true)
+            ToolResult("Git error: ${e.message}", isError = true)
         } catch (e: Exception) {
             Log.e(TAG, "Error: ${e.message}", e)
-            ToolCallResult("Error: ${e.javaClass.simpleName}: ${e.message}", isError = true)
+            ToolResult("Error: ${e.javaClass.simpleName}: ${e.message}", isError = true)
         }
     }
 
-    private fun clone(args: JSONObject, targetDir: File): ToolCallResult {
+    private fun clone(args: JSONObject, targetDir: File): ToolResult {
         val url = args.optString("url", "")
-        if (url.isBlank()) return ToolCallResult("Missing 'url' argument for clone", isError = true)
+        if (url.isBlank()) return ToolResult("Missing 'url' argument for clone", isError = true)
 
         val branch = args.optString("branch", "")
         val depth = args.optInt("depth", 0)
@@ -118,18 +118,18 @@ class GitTool(private val workingDir: File) {
         val head = git.repository.resolve("HEAD")
         git.close()
 
-        return ToolCallResult("Cloned $url to ${targetDir.name}\nHEAD: ${head?.name?.take(8) ?: "unknown"}")
+        return ToolResult("Cloned $url to ${targetDir.name}\nHEAD: ${head?.name?.take(8) ?: "unknown"}")
     }
 
-    private fun init(repoDir: File): ToolCallResult {
+    private fun init(repoDir: File): ToolResult {
         repoDir.mkdirs()
         val git = Git.init().setDirectory(repoDir).call()
         git.close()
-        return ToolCallResult("Initialized empty git repository in ${repoDir.absolutePath}")
+        return ToolResult("Initialized empty git repository in ${repoDir.absolutePath}")
     }
 
-    private fun status(repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository: ${repoDir.path}", isError = true)
+    private fun status(repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository: ${repoDir.path}", isError = true)
         val status = git.status().call()
         val sb = StringBuilder()
 
@@ -145,23 +145,23 @@ class GitTool(private val workingDir: File) {
         if (status.isClean) sb.appendLine("Working tree clean")
 
         git.close()
-        return ToolCallResult(sb.toString().trim())
+        return ToolResult(sb.toString().trim())
     }
 
-    private fun add(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun add(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val files = args.optJSONArray("files")
         val all = args.optBoolean("all", false)
 
         if (all) {
             git.add().addFilepattern(".").call()
             git.close()
-            return ToolCallResult("Added all files")
+            return ToolResult("Added all files")
         }
 
         if (files == null || files.length() == 0) {
             git.close()
-            return ToolCallResult("No files specified. Use {\"files\": [\"file.txt\"]} or {\"all\": true}", isError = true)
+            return ToolResult("No files specified. Use {\"files\": [\"file.txt\"]} or {\"all\": true}", isError = true)
         }
 
         val addCommand = git.add()
@@ -171,15 +171,15 @@ class GitTool(private val workingDir: File) {
         addCommand.call()
         git.close()
 
-        return ToolCallResult("Added ${files.length()} file(s)")
+        return ToolResult("Added ${files.length()} file(s)")
     }
 
-    private fun commit(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun commit(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val message = args.optString("message", "")
         if (message.isBlank()) {
             git.close()
-            return ToolCallResult("Missing 'message' argument for commit", isError = true)
+            return ToolResult("Missing 'message' argument for commit", isError = true)
         }
 
         val author = args.optString("author", "Goose")
@@ -191,11 +191,11 @@ class GitTool(private val workingDir: File) {
             .call()
 
         git.close()
-        return ToolCallResult("Committed: ${commitResult.id.name.take(8)} - $message")
+        return ToolResult("Committed: ${commitResult.id.name.take(8)} - $message")
     }
 
-    private fun push(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun push(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val remote = args.optString("remote", "origin")
         val branch = args.optString("branch", "")
         val token = args.optString("token", "")
@@ -215,11 +215,11 @@ class GitTool(private val workingDir: File) {
         }
 
         git.close()
-        return ToolCallResult(sb.toString().trim())
+        return ToolResult(sb.toString().trim())
     }
 
-    private fun pull(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun pull(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val remote = args.optString("remote", "origin")
         val token = args.optString("token", "")
 
@@ -232,14 +232,14 @@ class GitTool(private val workingDir: File) {
         git.close()
 
         return if (result.isSuccessful) {
-            ToolCallResult("Pull successful. ${result.mergeResult?.mergeStatus ?: ""}")
+            ToolResult("Pull successful. ${result.mergeResult?.mergeStatus ?: ""}")
         } else {
-            ToolCallResult("Pull failed: ${result.mergeResult?.mergeStatus}", isError = true)
+            ToolResult("Pull failed: ${result.mergeResult?.mergeStatus}", isError = true)
         }
     }
 
-    private fun log(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun log(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val maxCount = args.optInt("count", 10)
 
         val logCommand = git.log().setMaxCount(maxCount)
@@ -255,11 +255,11 @@ class GitTool(private val workingDir: File) {
         }
 
         git.close()
-        return ToolCallResult(sb.toString().trimEnd().ifBlank { "No commits yet" })
+        return ToolResult(sb.toString().trimEnd().ifBlank { "No commits yet" })
     }
 
-    private fun diff(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun diff(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val cached = args.optBoolean("cached", false)
 
         val outputStream = ByteArrayOutputStream()
@@ -288,11 +288,11 @@ class GitTool(private val workingDir: File) {
         git.close()
 
         val output = outputStream.toString()
-        return ToolCallResult(output.ifBlank { "No changes" })
+        return ToolResult(output.ifBlank { "No changes" })
     }
 
-    private fun branch(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun branch(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val create = args.optString("create", "")
         val delete = args.optString("delete", "")
         val list = args.optBoolean("list", create.isBlank() && delete.isBlank())
@@ -300,13 +300,13 @@ class GitTool(private val workingDir: File) {
         if (create.isNotBlank()) {
             git.branchCreate().setName(create).call()
             git.close()
-            return ToolCallResult("Created branch: $create")
+            return ToolResult("Created branch: $create")
         }
 
         if (delete.isNotBlank()) {
             git.branchDelete().setBranchNames(delete).setForce(true).call()
             git.close()
-            return ToolCallResult("Deleted branch: $delete")
+            return ToolResult("Deleted branch: $delete")
         }
 
         if (list) {
@@ -319,21 +319,21 @@ class GitTool(private val workingDir: File) {
                 sb.appendLine("$marker$name")
             }
             git.close()
-            return ToolCallResult(sb.toString().trimEnd().ifBlank { "No branches" })
+            return ToolResult(sb.toString().trimEnd().ifBlank { "No branches" })
         }
 
         git.close()
-        return ToolCallResult("Use {\"create\": \"name\"}, {\"delete\": \"name\"}, or {\"list\": true}")
+        return ToolResult("Use {\"create\": \"name\"}, {\"delete\": \"name\"}, or {\"list\": true}")
     }
 
-    private fun checkout(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun checkout(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val branch = args.optString("branch", "")
         val create = args.optBoolean("create", false)
 
         if (branch.isBlank()) {
             git.close()
-            return ToolCallResult("Missing 'branch' argument", isError = true)
+            return ToolResult("Missing 'branch' argument", isError = true)
         }
 
         val checkoutCommand = git.checkout().setName(branch)
@@ -341,30 +341,30 @@ class GitTool(private val workingDir: File) {
         checkoutCommand.call()
 
         git.close()
-        return ToolCallResult("Switched to branch: $branch${if (create) " (new)" else ""}")
+        return ToolResult("Switched to branch: $branch${if (create) " (new)" else ""}")
     }
 
-    private fun merge(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun merge(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val branch = args.optString("branch", "")
         if (branch.isBlank()) {
             git.close()
-            return ToolCallResult("Missing 'branch' argument for merge", isError = true)
+            return ToolResult("Missing 'branch' argument for merge", isError = true)
         }
 
         val ref = git.repository.findRef(branch)
         if (ref == null) {
             git.close()
-            return ToolCallResult("Branch not found: $branch", isError = true)
+            return ToolResult("Branch not found: $branch", isError = true)
         }
 
         val result = git.merge().include(ref).call()
         git.close()
-        return ToolCallResult("Merge ${result.mergeStatus}: $branch into ${git.repository.branch}")
+        return ToolResult("Merge ${result.mergeStatus}: $branch into ${git.repository.branch}")
     }
 
-    private fun remote(args: JSONObject, repoDir: File): ToolCallResult {
-        val git = openRepo(repoDir) ?: return ToolCallResult("Not a git repository", isError = true)
+    private fun remote(args: JSONObject, repoDir: File): ToolResult {
+        val git = openRepo(repoDir) ?: return ToolResult("Not a git repository", isError = true)
         val action = args.optString("action", "list")
 
         when (action) {
@@ -373,11 +373,11 @@ class GitTool(private val workingDir: File) {
                 val url = args.optString("url", "")
                 if (name.isBlank() || url.isBlank()) {
                     git.close()
-                    return ToolCallResult("Missing 'name' or 'url' for remote add", isError = true)
+                    return ToolResult("Missing 'name' or 'url' for remote add", isError = true)
                 }
                 git.remoteAdd().setName(name).setUri(org.eclipse.jgit.transport.URIish(url)).call()
                 git.close()
-                return ToolCallResult("Added remote: $name → $url")
+                return ToolResult("Added remote: $name → $url")
             }
             "list" -> {
                 val remotes = git.remoteList().call()
@@ -386,11 +386,11 @@ class GitTool(private val workingDir: File) {
                     sb.appendLine("${remote.name}: ${remote.urIs.firstOrNull() ?: "no url"}")
                 }
                 git.close()
-                return ToolCallResult(sb.toString().trimEnd().ifBlank { "No remotes configured" })
+                return ToolResult(sb.toString().trimEnd().ifBlank { "No remotes configured" })
             }
             else -> {
                 git.close()
-                return ToolCallResult("Unknown remote action: $action. Use 'add' or 'list'")
+                return ToolResult("Unknown remote action: $action. Use 'add' or 'list'")
             }
         }
     }
@@ -402,10 +402,7 @@ class GitTool(private val workingDir: File) {
         override val name = "git"
         override val description = "Execute git operations (clone, init, status, add, commit, push, pull, log, diff, branch, checkout, merge, remote)"
         override fun getSchema(): JSONObject = DEFINITION.getJSONObject("input_schema")
-        override suspend fun execute(input: JSONObject): ToolResult {
-            val result = this@GitTool.execute(input)
-            return ToolResult(result.output, result.isError)
-        }
+        override suspend fun execute(input: JSONObject): ToolResult = this@GitTool.execute(input)
     }
 
     private fun openRepo(dir: File): Git? {
