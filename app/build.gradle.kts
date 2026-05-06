@@ -89,5 +89,4 @@ dependencies {
     // JGit — pure Java/Kotlin Git implementation (no native binary needed)
     // Provides full git operations: clone, commit, push, pull, diff, log, branch
     implementation("org.eclipse.jgit:org.eclipse.jgit:6.10.0.202406032230-r")
-    implementation("org.eclipse.jgit:org.eclipse.jgit.ssh.jsch:6.10.0.202406032230-r")
 }
