@@ -131,7 +131,7 @@ val PROVIDER_CATALOG = listOf(
     ProviderInfo(
         id = "ollama",
         displayName = "Ollama",
-        description = "Local models via Ollama",
+        description = "Connect to Ollama server (local network or remote)",
         apiKeySettingsKey = "",
         requiresApiKey = false,
         baseUrlSettingsKey = "ollama_base_url",

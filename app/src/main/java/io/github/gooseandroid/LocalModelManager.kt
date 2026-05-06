@@ -26,6 +26,8 @@ class LocalModelManager(private val context: Context) {
         private const val TAG = "LocalModelManager"
         private const val MODELS_DIR = "models"
         private const val HF_BASE = "https://huggingface.co"
+        // Kaggle base URL (used by Google AI Edge Gallery — no auth required)
+        private const val KAGGLE_BASE = "https://www.kaggle.com/api/v1/models"
 
         // Singleton download scope — survives screen navigation
         private val downloadScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -63,13 +65,13 @@ class LocalModelManager(private val context: Context) {
          * Quantization: int4 (4-bit) for optimal mobile performance
          */
         val MODEL_CATALOG = listOf(
-            // === Gemma 3 (Google, latest stable) ===
+            // === Gemma 3 (Google) — Kaggle URLs (no auth required) ===
             ModelInfo(
                 id = "gemma3-1b-it",
                 name = "Gemma 3 1B",
-                description = "Google's smallest Gemma 3. Ultra-fast, great for simple tasks and quick responses.",
+                description = "Google's smallest Gemma 3. Ultra-fast, great for simple tasks.",
                 sizeBytes = 560_000_000L,
-                downloadUrl = "$HF_BASE/google/gemma-3-1b-it-litert/resolve/main/gemma3-1b-it-int4.task",
+                downloadUrl = "$KAGGLE_BASE/google/gemma-3/litert/gemma3-1b-it-int4/1/download",
                 filename = "gemma3-1b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 2048,
@@ -80,20 +82,20 @@ class LocalModelManager(private val context: Context) {
                 name = "Gemma 3 4B",
                 description = "Best balance of speed and intelligence. Recommended for most tasks.",
                 sizeBytes = 2_300_000_000L,
-                downloadUrl = "$HF_BASE/google/gemma-3-4b-it-litert/resolve/main/gemma3-4b-it-int4.task",
+                downloadUrl = "$KAGGLE_BASE/google/gemma-3/litert/gemma3-4b-it-int4/1/download",
                 filename = "gemma3-4b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 4096,
                 recommended = true
             ),
 
-            // === Gemma 4 (Google, newest generation) ===
+            // === Gemma 4 (Google, newest) — Kaggle URLs ===
             ModelInfo(
                 id = "gemma4-2b-it",
                 name = "Gemma 4 2B",
                 description = "Google's newest model. Improved reasoning and instruction following.",
                 sizeBytes = 1_400_000_000L,
-                downloadUrl = "$HF_BASE/google/gemma-4-2b-it-litert/resolve/main/gemma4-2b-it-int4.task",
+                downloadUrl = "$KAGGLE_BASE/google/gemma-4/litert/gemma4-2b-it-int4/1/download",
                 filename = "gemma4-2b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 2048,
@@ -104,7 +106,7 @@ class LocalModelManager(private val context: Context) {
                 name = "Gemma 4 4B",
                 description = "Google's newest 4B model. Near-cloud quality for on-device inference.",
                 sizeBytes = 2_500_000_000L,
-                downloadUrl = "$HF_BASE/google/gemma-4-4b-it-litert/resolve/main/gemma4-4b-it-int4.task",
+                downloadUrl = "$KAGGLE_BASE/google/gemma-4/litert/gemma4-4b-it-int4/1/download",
                 filename = "gemma4-4b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 4096,
@@ -115,20 +117,20 @@ class LocalModelManager(private val context: Context) {
                 name = "Gemma 4 12B",
                 description = "Google's most capable on-device model. Excellent reasoning, needs 8GB+ RAM.",
                 sizeBytes = 6_500_000_000L,
-                downloadUrl = "$HF_BASE/google/gemma-4-12b-it-litert/resolve/main/gemma4-12b-it-int4.task",
+                downloadUrl = "$KAGGLE_BASE/google/gemma-4/litert/gemma4-12b-it-int4/1/download",
                 filename = "gemma4-12b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 8192,
                 recommended = false
             ),
 
-            // === Llama 3.2 (Meta, via Google AI Edge) ===
+            // === Llama 3.2 (Meta via Google) — Kaggle URLs ===
             ModelInfo(
                 id = "llama-3.2-1b-it",
                 name = "Llama 3.2 1B",
                 description = "Meta's smallest Llama optimized for mobile. Ultra-fast responses.",
                 sizeBytes = 750_000_000L,
-                downloadUrl = "$HF_BASE/google/llama-3.2-1b-it-litert/resolve/main/llama-3.2-1b-it-int4.task",
+                downloadUrl = "$KAGGLE_BASE/google/llama-3.2/litert/llama-3.2-1b-it-int4/1/download",
                 filename = "llama-3.2-1b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 2048,
@@ -139,11 +141,24 @@ class LocalModelManager(private val context: Context) {
                 name = "Llama 3.2 3B",
                 description = "Meta's 3B Llama. Good balance of speed and capability on mobile.",
                 sizeBytes = 1_800_000_000L,
-                downloadUrl = "$HF_BASE/google/llama-3.2-3b-it-litert/resolve/main/llama-3.2-3b-it-int4.task",
+                downloadUrl = "$KAGGLE_BASE/google/llama-3.2/litert/llama-3.2-3b-it-int4/1/download",
                 filename = "llama-3.2-3b-it-int4.task",
                 format = ModelFormat.LITERT,
                 minRamMb = 4096,
                 recommended = true
+            ),
+
+            // === Phi 3.5 Mini (Microsoft via Google) — Kaggle URL ===
+            ModelInfo(
+                id = "phi-3.5-mini",
+                name = "Phi 3.5 Mini",
+                description = "Microsoft's compact model. Strong reasoning for its size.",
+                sizeBytes = 2_200_000_000L,
+                downloadUrl = "$KAGGLE_BASE/google/phi-3.5/litert/phi-3.5-mini-it-int4/1/download",
+                filename = "phi-3.5-mini-it-int4.task",
+                format = ModelFormat.LITERT,
+                minRamMb = 4096,
+                recommended = false
             )
         )
     }

@@ -401,8 +401,7 @@ fun ConfigureProviderScreen(onBack: () -> Unit, onNavigateToModels: () -> Unit =
     var expandedProviderId by remember { mutableStateOf<String?>(null) }
 
     // Split catalog into cloud and local
-    val cloudProviders = PROVIDER_CATALOG.filter { it.id != "ollama" }
-    val localProviders = PROVIDER_CATALOG.filter { it.id == "ollama" }
+    val cloudProviders = PROVIDER_CATALOG
 
     fun getKeyForProvider(providerId: String): String {
         return when (providerId) {
@@ -553,83 +552,24 @@ fun ConfigureProviderScreen(onBack: () -> Unit, onNavigateToModels: () -> Unit =
                             contentPadding = PaddingValues(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                            // On-device AI section
                             item {
-                                SectionHeader(title = "Ollama", icon = Icons.Filled.PhoneAndroid)
-                            }
-
-                            items(localProviders, key = { it.id }) { provider ->
-                                ProviderCard(
-                                    provider = provider,
-                                    isActive = activeProvider == provider.id,
-                                    isConfigured = isProviderConfigured(provider.id),
-                                    isExpanded = expandedProviderId == provider.id,
-                                    apiKey = "",
-                                    baseUrl = ollamaBaseUrl,
-                                    modelName = "",
-                                    onToggleExpand = {
-                                        expandedProviderId = if (expandedProviderId == provider.id) null else provider.id
-                                    },
-                                    onSelectActive = {
-                                        scope.launch {
-                                            settingsStore.setString(SettingsKeys.ACTIVE_PROVIDER, provider.id)
-                                            if (provider.models.isNotEmpty()) {
-                                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, provider.models.first().id)
-                                            }
-                                        }
-                                    },
-                                    settingsKey = "",
-                                    settingsStore = settingsStore,
-                                    onBaseUrlChange = { newUrl ->
-                                        scope.launch {
-                                            settingsStore.setString(SettingsKeys.OLLAMA_BASE_URL, newUrl)
-                                        }
-                                    },
-                                    onModelNameChange = {}
+                                SectionHeader(title = "On-Device AI (MediaPipe)", icon = Icons.Filled.PhoneAndroid)
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "Run AI models directly on your device. No internet required after download.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
 
-                            // Model selection for local
-                            item {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                SectionHeader(title = "Model Selection", icon = Icons.Filled.Memory)
-                            }
-
-                            item {
-                                if (activeProvider == "ollama") {
-                                    ModelSelectionCard(
-                                        activeProvider = activeProvider,
-                                        activeModel = activeModel,
-                                        customModel = customModel,
-                                        onModelSelected = { model ->
-                                            scope.launch {
-                                                settingsStore.setString(SettingsKeys.ACTIVE_MODEL, model)
-                                            }
-                                        }
-                                    )
-                                } else {
-                                    Card(modifier = Modifier.fillMaxWidth()) {
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(16.dp)
-                                        ) {
-                                            Text(
-                                                text = "Select Ollama as your active provider to manage local models.",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            // HuggingFace Token (required for gated models)
+                            // Authentication (optional — for gated models)
                             item {
                                 Spacer(modifier = Modifier.height(16.dp))
-                                SectionHeader(title = "HuggingFace Token", icon = Icons.Filled.Key)
+                                SectionHeader(title = "Authentication (Optional)", icon = Icons.Filled.Key)
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    "Required to download Gemma and Llama models (they are gated on HuggingFace).",
+                                    "Some models require a HuggingFace token. If downloads fail with 401, add your token here.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -644,7 +584,7 @@ fun ConfigureProviderScreen(onBack: () -> Unit, onNavigateToModels: () -> Unit =
                                         hfToken = newVal
                                         scope.launch { settingsStore.setString(SettingsKeys.HUGGINGFACE_TOKEN, newVal) }
                                     },
-                                    label = { Text("HuggingFace Token") },
+                                    label = { Text("HuggingFace Token (optional)") },
                                     placeholder = { Text("hf_...") },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth()
@@ -675,11 +615,11 @@ fun ConfigureProviderScreen(onBack: () -> Unit, onNavigateToModels: () -> Unit =
                                         )
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "GGUF Model Downloads",
+                                                text = "Local AI Models",
                                                 style = MaterialTheme.typography.titleSmall
                                             )
                                             Text(
-                                                text = "Download and manage local AI models (Gemma, Llama, Phi, Qwen)",
+                                                text = "Download and manage on-device AI models (Gemma 3/4, Llama 3.2, Phi 3.5)",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -719,9 +659,9 @@ fun ConfigureProviderScreen(onBack: () -> Unit, onNavigateToModels: () -> Unit =
                                             )
                                         }
                                         Text(
-                                            text = "Local models run on your device via Ollama. " +
-                                                    "Make sure Ollama is running and accessible at the configured base URL. " +
-                                                    "Models must be pulled via the Ollama CLI before they appear here.",
+                                            text = "Local models run on your device using Google's MediaPipe LLM Inference engine. " +
+                                                    "Models are downloaded as .task files optimized for mobile GPU acceleration. " +
+                                                    "No internet connection is needed after download.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
