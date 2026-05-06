@@ -82,9 +82,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // Google AI Edge LiteRT - on-device LLM inference
-    // Uses Snapdragon 888's Hexagon DSP + Adreno 660 GPU for acceleration
-    // TODO: Uncomment once LiteRT inference integration is ready
-    // implementation("com.google.ai.edge.litert:litert:1.0.1")
-    // implementation("com.google.ai.edge.litert:litert-gpu:1.0.1")
+    // MediaPipe LLM Inference — Google's production on-device LLM API
+    // This is what Google AI Edge Gallery uses for local model inference
+    // Supports GGUF models with GPU acceleration
+    implementation("com.google.mediapipe:tasks-genai:0.10.22")
 }

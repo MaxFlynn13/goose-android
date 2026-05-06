@@ -87,6 +87,41 @@ class LocalModelManager(private val context: Context) {
                 recommended = true
             ),
 
+            // === Gemma 4 (Google, newest generation, multimodal) ===
+            ModelInfo(
+                id = "gemma4-2b-it-q4",
+                name = "Gemma 4 2B Instruct",
+                description = "Google's newest model. Improved reasoning over Gemma 3, fast on mobile.",
+                sizeBytes = 1_500_000_000L,
+                downloadUrl = "$HF_BASE/bartowski/gemma-4-2b-it-GGUF/resolve/main/gemma-4-2b-it-Q4_K_M.gguf",
+                filename = "gemma-4-2b-it-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
+                minRamMb = 3072,
+                recommended = true
+            ),
+            ModelInfo(
+                id = "gemma4-4b-it-q4",
+                name = "Gemma 4 4B Instruct",
+                description = "Best balance of speed and intelligence. Recommended for most tasks.",
+                sizeBytes = 2_800_000_000L,
+                downloadUrl = "$HF_BASE/bartowski/gemma-4-4b-it-GGUF/resolve/main/gemma-4-4b-it-Q4_K_M.gguf",
+                filename = "gemma-4-4b-it-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
+                minRamMb = 4096,
+                recommended = true
+            ),
+            ModelInfo(
+                id = "gemma4-12b-it-q4",
+                name = "Gemma 4 12B Instruct",
+                description = "Google's most capable mobile model. Near-cloud quality reasoning.",
+                sizeBytes = 7_500_000_000L,
+                downloadUrl = "$HF_BASE/bartowski/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+                filename = "gemma-4-12b-it-Q4_K_M.gguf",
+                format = ModelFormat.GGUF,
+                minRamMb = 8192,
+                recommended = true
+            ),
+
             // === Llama 3.2 (Meta, ungated) ===
             ModelInfo(
                 id = "llama-3.2-1b-q4",
