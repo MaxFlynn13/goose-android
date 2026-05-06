@@ -178,6 +178,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun prefillPrompt(prompt: String) { _pendingPrompt.value = prompt }
     fun clearPendingPrompt() { _pendingPrompt.value = null }
 
+    /**
+     * Execute a skill/recipe non-interactively (equivalent to `goose run`).
+     * Creates a new session, sends the skill instructions, and lets the agent
+     * run to completion without further user input.
+     */
+    fun executeSkill(skillName: String, instructions: String) {
+        createNewSession()
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(100) // Let session creation settle
+            sendMessage(instructions)
+        }
+    }
+
     fun setActivePersona(personaId: String, name: String, systemPrompt: String) {
         viewModelScope.launch {
             settingsStore.setString("active_persona_id", personaId)

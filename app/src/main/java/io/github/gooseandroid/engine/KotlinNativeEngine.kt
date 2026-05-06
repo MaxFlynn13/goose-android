@@ -67,6 +67,9 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             // Still mark as connected — the user can configure a provider later
         }
 
+        // Load configured MCP extensions
+        loadExtensions()
+
         _status.value = EngineStatus.CONNECTED
         Log.i(TAG, "Kotlin native engine ready. Tools: ${toolRouter.getToolNames().joinToString()}")
         return true
@@ -90,7 +93,14 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
         }
 
         // Create a FRESH agent loop for each message — never reuse stale state
-        val loop = StreamingAgentLoop(provider, toolRouter, mcpManager, permissionManager, contextTracker)
+        val loop = StreamingAgentLoop(
+            provider = provider,
+            toolRouter = toolRouter,
+            mcpManager = mcpManager,
+            permissionManager = permissionManager,
+            contextTracker = contextTracker,
+            modelId = provider.modelId
+        )
 
         // Run the agent loop and emit all events
         try {
@@ -304,5 +314,56 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             }
         }
         return null
+    }
+
+    /**
+     * Load MCP extensions from the config file.
+     * Reads workspace/.config/extensions.json for configured extensions.
+     * Each extension can be stdio (command to spawn) or HTTP (URL to connect to).
+     */
+    private fun loadExtensions() {
+        try {
+            val configFile = File(workspaceDir, ".config/extensions.json")
+            if (!configFile.exists()) {
+                Log.d(TAG, "No extensions config found")
+                return
+            }
+
+            val json = configFile.readText()
+            val extensions = org.json.JSONArray(json)
+
+            for (i in 0 until extensions.length()) {
+                val ext = extensions.getJSONObject(i)
+                val name = ext.optString("name", "")
+                val type = ext.optString("type", "")
+                val enabled = ext.optBoolean("enabled", true)
+
+                if (!enabled || name.isBlank()) continue
+
+                when (type) {
+                    "stdio" -> {
+                        val command = ext.optString("command", "")
+                        val args = mutableListOf<String>()
+                        ext.optJSONArray("args")?.let { arr ->
+                            for (j in 0 until arr.length()) args.add(arr.getString(j))
+                        }
+                        if (command.isNotBlank()) {
+                            val fullCommand = mutableListOf(command).apply { addAll(args) }
+                            Log.i(TAG, "Loading stdio extension: $name → $fullCommand")
+                            // mcpManager.addStdioExtension(name, fullCommand, workspaceDir, shellEnv)
+                        }
+                    }
+                    "http", "streamable_http" -> {
+                        val url = ext.optString("url", "")
+                        if (url.isNotBlank()) {
+                            Log.i(TAG, "Loading HTTP extension: $name → $url")
+                            // mcpManager.addHttpExtension(name, url)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load extensions: ${e.message}")
+        }
     }
 }

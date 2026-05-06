@@ -7,6 +7,7 @@ import io.github.gooseandroid.engine.providers.LlmProvider
 import io.github.gooseandroid.engine.providers.LlmToolCall
 import io.github.gooseandroid.engine.providers.StreamEvent
 import io.github.gooseandroid.engine.tools.ToolRouter
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
@@ -39,6 +40,8 @@ class StreamingAgentLoop(
     private val mcpManager: McpExtensionManager,
     private val permissionManager: PermissionManager? = null,
     private val contextTracker: ContextTracker? = null,
+    private val tokenCounter: TokenCounter = TokenCounter(),
+    private val modelId: String = "",
     private val maxIterations: Int = 25
 ) {
     companion object {
@@ -126,6 +129,22 @@ The working directory is the user's project workspace.
 
             // Support cancellation at the top of each iteration
             currentCoroutineContext().ensureActive()
+
+            // ── Check context window BEFORE calling the LLM ─────────────
+            val contextAction = tokenCounter.checkContextUsage(messages, modelId)
+            when (contextAction) {
+                TokenCounter.ContextAction.HARD_TRUNCATE -> {
+                    val truncated = tokenCounter.truncateMessages(messages, modelId)
+                    messages.clear()
+                    messages.addAll(truncated)
+                    Log.w(TAG, "Context window exceeded — hard truncated to ${messages.size} messages")
+                }
+                TokenCounter.ContextAction.COMPACT -> {
+                    // Emit a note that compaction would help
+                    Log.i(TAG, "Context window at 80% — compaction recommended")
+                }
+                TokenCounter.ContextAction.OK -> { /* Fine */ }
+            }
 
             // State for this single streaming turn
             val turnText = StringBuilder()
@@ -240,28 +259,73 @@ The working directory is the user's project workspace.
                 }
             ))
 
-            // ── Execute tool calls ──────────────────────────────────────
-            for (toolCall in turnToolCalls) {
-                // Check cancellation before each tool execution
+            // ── Execute tool calls — parallel when multiple ─────────────
+            if (turnToolCalls.size == 1) {
+                // Single tool call — execute directly
+                val toolCall = turnToolCalls[0]
+
+                // Check cancellation before tool execution
                 currentCoroutineContext().ensureActive()
 
-                Log.i(TAG, "Executing tool: ${toolCall.name} (id=${toolCall.id})")
-                emit(AgentEvent.ToolStart(toolCall.id, toolCall.name, toolCall.input.toString()))
+                // Permission check
+                val allowed = permissionManager?.checkPermission(toolCall.name, toolCall.input) ?: true
+                if (!allowed) {
+                    Log.i(TAG, "Tool ${toolCall.name} denied by permission manager")
+                    emit(AgentEvent.ToolStart(toolCall.id, toolCall.name, toolCall.input.toString()))
+                    val deniedOutput = "Operation denied by user."
+                    emit(AgentEvent.ToolEnd(toolCall.id, toolCall.name, deniedOutput, true))
+                    messages.add(ConversationMessage(
+                        role = "tool",
+                        content = deniedOutput,
+                        toolCallId = toolCall.id,
+                        toolName = toolCall.name
+                    ))
+                } else {
+                    Log.i(TAG, "Executing tool: ${toolCall.name} (id=${toolCall.id})")
+                    emit(AgentEvent.ToolStart(toolCall.id, toolCall.name, toolCall.input.toString()))
 
-                val result = executeTool(toolCall)
+                    val result = executeTool(toolCall)
 
-                Log.i(TAG, "Tool ${toolCall.name} finished (error=${result.isError}, " +
-                        "output=${result.output.take(200)})")
-                emit(AgentEvent.ToolEnd(toolCall.id, toolCall.name, result.output, result.isError))
+                    Log.i(TAG, "Tool ${toolCall.name} finished (error=${result.isError}, " +
+                            "output=${result.output.take(200)})")
+                    emit(AgentEvent.ToolEnd(toolCall.id, toolCall.name, result.output, result.isError))
 
-                // Append tool result for the next LLM turn in the correct format
-                // The role is "tool" with the toolCallId so the provider can match it
-                messages.add(ConversationMessage(
-                    role = "tool",
-                    content = result.output,
-                    toolCallId = toolCall.id,
-                    toolName = toolCall.name
-                ))
+                    messages.add(ConversationMessage(
+                        role = "tool",
+                        content = result.output,
+                        toolCallId = toolCall.id,
+                        toolName = toolCall.name
+                    ))
+
+                    contextTracker?.let { trackToolExecution(it, toolCall, result.output, result.isError) }
+                }
+            } else {
+                // Multiple tool calls — execute in parallel
+                val results = turnToolCalls.map { toolCall ->
+                    async(currentCoroutineContext()) {
+                        // Permission check
+                        val allowed = permissionManager?.checkPermission(toolCall.name, toolCall.input) ?: true
+                        if (!allowed) {
+                            Triple(toolCall, "Operation denied by user.", true)
+                        } else {
+                            val result = executeTool(toolCall)
+                            Triple(toolCall, result.output, result.isError)
+                        }
+                    }
+                }
+
+                for (deferred in results) {
+                    val (toolCall, output, isError) = deferred.await()
+                    emit(AgentEvent.ToolStart(toolCall.id, toolCall.name, toolCall.input.toString()))
+                    emit(AgentEvent.ToolEnd(toolCall.id, toolCall.name, output, isError))
+                    messages.add(ConversationMessage(
+                        role = "tool",
+                        content = output,
+                        toolCallId = toolCall.id,
+                        toolName = toolCall.name
+                    ))
+                    contextTracker?.let { trackToolExecution(it, toolCall, output, isError) }
+                }
             }
 
             // Loop back — the LLM will see tool results and stream its next response
@@ -322,6 +386,36 @@ The working directory is the user's project workspace.
             )
         } catch (e: Exception) {
             ToolCallResult("MCP tool error: ${e.message}", isError = true)
+        }
+    }
+
+    /**
+     * Track tool execution in the context tracker for session awareness.
+     */
+    private fun trackToolExecution(
+        tracker: ContextTracker,
+        toolCall: LlmToolCall,
+        output: String,
+        isError: Boolean
+    ) {
+        when (toolCall.name) {
+            "shell" -> {
+                val command = toolCall.input.optString("command", "")
+                val exitCode = if (isError) 1 else 0
+                tracker.recordCommand(command, exitCode, output)
+            }
+            "write" -> {
+                val path = toolCall.input.optString("path", "")
+                if (path.isNotBlank()) tracker.recordFileModified(path)
+            }
+            "edit" -> {
+                val path = toolCall.input.optString("path", "")
+                if (path.isNotBlank()) tracker.recordFileModified(path)
+            }
+            "tree" -> {
+                val path = toolCall.input.optString("path", "")
+                if (path.isNotBlank()) tracker.recordFileRead(path)
+            }
         }
     }
 }
