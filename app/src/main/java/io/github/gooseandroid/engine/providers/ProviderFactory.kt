@@ -40,6 +40,13 @@ object ProviderFactory {
             val url = baseUrl ?: "http://localhost:11434/v1"
             OpenAIProvider("ollama", modelId, url)
         }
+        "databricks" -> {
+            // For Databricks, baseUrl is the workspace URL, apiKey is the token
+            val workspaceUrl = baseUrl ?: ""
+            if (workspaceUrl.isNotBlank()) {
+                DatabricksProvider(workspaceUrl, apiKey, modelId)
+            } else null
+        }
         "local" -> {
             // For local models, apiKey carries the model file path
             if (context != null && apiKey.isNotBlank()) {
@@ -64,6 +71,6 @@ object ProviderFactory {
      * List all supported provider IDs.
      */
     fun supportedProviders(): List<String> = listOf(
-        "anthropic", "openai", "google", "mistral", "openrouter", "ollama", "local"
+        "anthropic", "openai", "google", "mistral", "openrouter", "ollama", "databricks", "local"
     )
 }

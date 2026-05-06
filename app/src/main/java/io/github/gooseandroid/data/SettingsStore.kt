@@ -28,6 +28,10 @@ object SettingsKeys {
     // Ollama
     const val OLLAMA_BASE_URL = "ollama_base_url"
 
+    // Databricks
+    const val DATABRICKS_API_KEY = "databricks_api_key"
+    const val DATABRICKS_WORKSPACE_URL = "databricks_workspace_url"
+
     // Active provider/model selection
     const val ACTIVE_PROVIDER = "active_provider"
     const val ACTIVE_MODEL = "active_model"

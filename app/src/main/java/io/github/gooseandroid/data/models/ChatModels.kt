@@ -152,6 +152,19 @@ val PROVIDER_CATALOG = listOf(
         models = listOf(
             ModelOption("custom", "Custom Model")
         )
+    ),
+    ProviderInfo(
+        id = "databricks",
+        displayName = "Databricks",
+        description = "Databricks Model Serving",
+        apiKeySettingsKey = "databricks_api_key",
+        baseUrlSettingsKey = "databricks_workspace_url",
+        models = listOf(
+            ModelOption("databricks-meta-llama-3-1-70b-instruct", "Llama 3.1 70B"),
+            ModelOption("databricks-meta-llama-3-1-405b-instruct", "Llama 3.1 405B"),
+            ModelOption("databricks-dbrx-instruct", "DBRX Instruct"),
+            ModelOption("databricks-mixtral-8x7b-instruct", "Mixtral 8x7B")
+        )
     )
 )
 

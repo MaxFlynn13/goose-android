@@ -310,6 +310,7 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
                 "google" -> settingsStore.getString(SettingsKeys.GOOGLE_API_KEY).first()
                 "mistral" -> settingsStore.getString(SettingsKeys.MISTRAL_API_KEY).first()
                 "openrouter" -> settingsStore.getString(SettingsKeys.OPENROUTER_API_KEY).first()
+                "databricks" -> settingsStore.getString(SettingsKeys.DATABRICKS_API_KEY).first()
                 else -> ""
             }
         } catch (e: Exception) {
@@ -325,6 +326,7 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             Triple("google", SettingsKeys.GOOGLE_API_KEY, "gemini-2.5-flash"),
             Triple("mistral", SettingsKeys.MISTRAL_API_KEY, "mistral-large-latest"),
             Triple("openrouter", SettingsKeys.OPENROUTER_API_KEY, "anthropic/claude-sonnet-4"),
+            Triple("databricks", SettingsKeys.DATABRICKS_API_KEY, "databricks-meta-llama-3-1-70b-instruct"),
         )
 
         for ((providerId, keyName, defaultModel) in keys) {
