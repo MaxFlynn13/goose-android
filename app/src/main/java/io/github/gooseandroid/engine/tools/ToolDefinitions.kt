@@ -30,7 +30,7 @@ data class ToolResult(
 // Helper – build an OpenAI-style function-calling schema
 // ---------------------------------------------------------------------------
 
-private fun functionSchema(
+internal fun functionSchema(
     name: String,
     description: String,
     properties: JSONObject,

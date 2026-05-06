@@ -1517,7 +1517,7 @@ class AppIntrospectionTool(private val context: Context) : Tool {
                 put("description", "Value to set (for set_setting)")
             })
         },
-        required = listOf("action")
+        required = org.json.JSONArray(listOf("action"))
     )
 
     override suspend fun execute(input: JSONObject): ToolResult {
