@@ -152,7 +152,19 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
                 return@withContext false
             }
 
-            currentProvider = ProviderFactory.create(providerId, apiKey, modelId)
+            val provider = ProviderFactory.create(providerId, apiKey, modelId)
+            if (provider == null) {
+                Log.w(TAG, "Provider '$providerId' not supported or is local-only")
+                // Try fallback
+                val fallback = findFirstConfiguredProvider()
+                if (fallback != null) {
+                    currentProvider = fallback
+                    return@withContext true
+                }
+                currentProvider = null
+                return@withContext false
+            }
+            currentProvider = provider
             Log.i(TAG, "Provider ready: $providerId / $modelId")
             return@withContext true
         } catch (e: Exception) {
@@ -211,6 +223,8 @@ class KotlinNativeEngine(private val context: Context) : GooseEngine {
             Triple("anthropic", SettingsKeys.ANTHROPIC_API_KEY, "claude-sonnet-4-20250514"),
             Triple("openai", SettingsKeys.OPENAI_API_KEY, "gpt-4o"),
             Triple("google", SettingsKeys.GOOGLE_API_KEY, "gemini-2.5-flash"),
+            Triple("mistral", SettingsKeys.MISTRAL_API_KEY, "mistral-large-latest"),
+            Triple("openrouter", SettingsKeys.OPENROUTER_API_KEY, "anthropic/claude-sonnet-4"),
         )
 
         for ((providerId, keyName, defaultModel) in keys) {

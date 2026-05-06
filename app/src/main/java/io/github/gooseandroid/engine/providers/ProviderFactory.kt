@@ -21,21 +21,30 @@ object ProviderFactory {
         apiKey: String,
         modelId: String,
         baseUrl: String? = null
-    ): LlmProvider = when (providerId) {
+    ): LlmProvider? = when (providerId) {
         "anthropic" -> AnthropicProvider(apiKey, modelId)
-        "openai" -> {
-            if (baseUrl != null) {
-                OpenAIProvider(apiKey, modelId, baseUrl)
-            } else {
-                OpenAIProvider(apiKey, modelId)
+        "openai", "openrouter" -> {
+            val url = when {
+                baseUrl != null -> baseUrl
+                providerId == "openrouter" -> "https://openrouter.ai/api/v1"
+                else -> null
             }
+            if (url != null) OpenAIProvider(apiKey, modelId, url) else OpenAIProvider(apiKey, modelId)
         }
         "google" -> GoogleProvider(apiKey, modelId)
-        else -> throw IllegalArgumentException("Unknown provider: $providerId. Supported: anthropic, openai, google")
+        "mistral" -> OpenAIProvider(apiKey, modelId, "https://api.mistral.ai/v1")
+        "ollama" -> {
+            val url = baseUrl ?: "http://localhost:11434/v1"
+            OpenAIProvider("ollama", modelId, url)
+        }
+        "local" -> null  // Local models handled separately via LiteRT
+        else -> null  // Unknown provider — return null, don't crash
     }
 
     /**
      * List all supported provider IDs.
      */
-    fun supportedProviders(): List<String> = listOf("anthropic", "openai", "google")
+    fun supportedProviders(): List<String> = listOf(
+        "anthropic", "openai", "google", "mistral", "openrouter", "ollama"
+    )
 }

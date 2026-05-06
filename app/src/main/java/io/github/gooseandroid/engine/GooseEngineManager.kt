@@ -42,26 +42,33 @@ class GooseEngineManager(private val context: Context) {
         Log.i(TAG, "Initializing engine manager...")
         _engineInfo.value = "Starting Goose engine..."
 
-        // Phase 1: Try the Rust binary engine
+        // Phase 1: Try the Rust binary engine (strict 5s timeout)
+        // If the binary can't execute on this device, fail fast and move on.
         try {
-            Log.i(TAG, "Attempting Rust binary engine...")
+            Log.i(TAG, "Attempting Rust binary engine (5s timeout)...")
             _engineInfo.value = "Trying Goose binary..."
 
-            val rust = RustBinaryEngine(context)
-            rustEngine = rust
+            val rustResult = withTimeoutOrNull(5_000L) {
+                val rust = RustBinaryEngine(context)
+                rustEngine = rust
+                val ready = rust.initialize()
+                if (ready) rust else null
+            }
 
-            val rustReady = rust.initialize()
-            if (rustReady) {
-                _activeEngine.value = rust
+            if (rustResult != null) {
+                _activeEngine.value = rustResult
                 _engineInfo.value = "Goose (native binary)"
                 Log.i(TAG, "Rust binary engine connected successfully")
                 initComplete.complete(Unit)
                 return
             } else {
-                Log.w(TAG, "Rust binary engine failed to initialize")
+                Log.w(TAG, "Rust binary engine failed or timed out")
+                rustEngine?.shutdown()
+                rustEngine = null
             }
         } catch (e: Exception) {
             Log.w(TAG, "Rust binary engine threw exception: ${e.message}")
+            rustEngine = null
         }
 
         // Phase 2: Fall back to Kotlin native engine (always works)
