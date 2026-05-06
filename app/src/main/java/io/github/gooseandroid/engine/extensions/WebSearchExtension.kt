@@ -181,7 +181,7 @@ class WebSearchExtension(
         val engineLabel = if (engine == "brave" && !braveApiKey.isNullOrBlank()) "Brave Search" else "DuckDuckGo"
         val formatted = buildString {
             appendLine("## Detailed Search Results for: $query")
-            appendLine("_Engine: $engineLabel_")
+            appendLine("_Engine: ${engineLabel}_")
             appendLine()
             results.forEachIndexed { index, result ->
                 appendLine("### ${index + 1}. ${result.title}")
@@ -195,7 +195,7 @@ class WebSearchExtension(
                 appendLine()
             }
             appendLine("---")
-            appendLine("_${results.size} results returned from $engineLabel_")
+            appendLine("_${results.size} results returned from ${engineLabel}_")
         }
         return ToolResult(output = formatted)
     }
